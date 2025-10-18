@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+python-multipart
+torch
+torchvision
+scikit-learn
+pandas
+lightgbm
+llama-cpp-python
+torchxrayvision
