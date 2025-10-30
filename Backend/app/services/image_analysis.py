@@ -1,3 +1,5 @@
+# backend/app/services/image_analysis.py (Updated)
+
 import torch
 import torchxrayvision as xrv
 import numpy as np
@@ -5,101 +7,147 @@ from PIL import Image
 import io
 import logging
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as TF # Import for functional transforms
 from fastapi import HTTPException
+
+# --- Import custom model ---
+# Use relative import from the new 'models' sub-directory
+from .models.CustomModel import PretrainedDensenet
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-model = None
-transform = None
+# --- CheXNet Model (for chest x-ray) ---
+chest_model = None
+chest_transform = None
+# Path inside the Docker container
+fracture_model_path = "/app/app/services/models/model.pt"
 
-def load_model():
-    """Loads the model and transforms on the first call."""
-    global model, transform
-    if model is None:
+def load_chest_model():
+    """Loads the CheXNet model and transforms on the first call."""
+    global chest_model, chest_transform
+    if chest_model is None:
         try:
             logger.info("Loading pre-trained CheXNet model (densenet121-res224-all)...")
-            model = xrv.models.DenseNet(weights="densenet121-res224-all")
-            model.eval()
+            chest_model = xrv.models.DenseNet(weights="densenet121-res224-all")
+            chest_model.eval()
             logger.info("CheXNet model loaded successfully.")
 
-            # --- UPDATED TRANSFORMS FOR 1 CHANNEL ---
-            transform = transforms.Compose([
+            chest_transform = transforms.Compose([
                 transforms.Resize(256),
                 transforms.CenterCrop(224),
-                # 1. Ensure image is Grayscale BEFORE converting to tensor
                 transforms.Grayscale(num_output_channels=1),
-                transforms.ToTensor(),
-                # 2. Use Normalize suitable for 1 channel (e.g., ImageNet mean/std for grayscale)
-                #    Often, medical images use simple normalization [0, 1] or specific windowing.
-                #    Let's try normalizing with the mean of ImageNet means/stds as a starting point.
-                #    mean = 0.485*0.299 + 0.456*0.587 + 0.406*0.114 approx 0.449
-                #    std = sqrt( (0.229*0.299)**2 + (0.224*0.587)**2 + (0.225*0.114)**2 ) approx 0.157 ???
-                #    OR just use the values torchxrayvision might implicitly use or simpler [0.5], [0.5]
-                #    Let's use [0.5], [0.5] for normalization to [-1, 1] range after ToTensor brings to [0, 1]
-                # transforms.Normalize(mean=[0.5], std=[0.5])
-                # Alternatively, skip normalization if ToTensor() brings to [0, 1] which might be sufficient
-                # If skipping Normalize, comment out the line above.
+                transforms.ToTensor()
             ])
-            logger.info("Transforms configured (Resize, Crop, Grayscale, ToTensor to [0,1]).")
-
+            logger.info("Transforms for CheXNet configured.")
         except Exception as e:
-            logger.error(f"CRITICAL ERROR: Failed to load CheXNet model/setup transforms: {e}")
-            raise RuntimeError(f"Failed to load AI model: {e}")
+            logger.error(f"CRITICAL ERROR: Failed to load CheXNet model: {e}")
+            raise RuntimeError(f"Failed to load AI model (CheXNet): {e}")
+
+# --- Fracture Model (for extremities) ---
+fracture_model = None
+device = torch.device("cpu") # Run on CPU
+
+def load_fracture_model():
+    """Loads the custom Fracture Detection model on the first call."""
+    global fracture_model
+    if fracture_model is None:
+        try:
+            logger.info("Loading pre-trained Fracture model (Custom Densenet)...")
+            fracture_model = PretrainedDensenet()
+            fracture_model.load_state_dict(torch.load(fracture_model_path, map_location=device))
+            fracture_model.eval()
+            logger.info("Fracture model loaded successfully.")
+        except FileNotFoundError:
+             logger.error(f"CRITICAL ERROR: Model file not found at {fracture_model_path}. Did you update the Dockerfile?")
+             raise RuntimeError(f"Model file not found: {fracture_model_path}")
+        except Exception as e:
+            logger.error(f"CRITICAL ERROR: Failed to load Fracture model: {e}")
+            raise RuntimeError(f"Failed to load AI model (Fracture): {e}")
 
 
+# --- Analysis function for CheXNet ---
 def analyze_chest_xray(image_bytes: bytes) -> dict:
-    """
-    Takes chest x-ray image bytes (expects grayscale), analyzes using CheXNet,
-    and returns a dictionary with pathology probabilities.
-    """
-    if model is None or transform is None:
-        load_model()
-        if model is None or transform is None:
-             raise HTTPException(status_code=503, detail="AI model is temporarily unavailable (failed to load).")
+    """Analyzes chest x-ray for pathologies."""
+    if chest_model is None or chest_transform is None:
+        load_chest_model()
+        if chest_model is None or chest_transform is None:
+             raise HTTPException(status_code=503, detail="CheXNet model is temporarily unavailable.")
 
     try:
         logger.info("Starting image preprocessing for CheXNet (1 channel)...")
-        # 1. Open image from bytes using Pillow
-        # --- CHANGED: Convert to 'L' (Grayscale) instead of 'RGB' ---
         image = Image.open(io.BytesIO(image_bytes)).convert('L')
-
-        # 2. Apply the updated transformations
-        img_tensor = transform(image)
-        logger.debug(f"Tensor shape after transforms: {img_tensor.shape}") # Expect [1, 224, 224]
-
-        # 3. Add batch dimension
-        # [1, 224, 224] -> [1, 1, 224, 224]
+        img_tensor = chest_transform(image)
+        min_val, max_val = torch.min(img_tensor), torch.max(img_tensor)
+        logger.debug(f"Tensor value range after ToTensor: [{min_val:.2f}, {max_val:.2f}]")
         img_tensor = img_tensor.unsqueeze(0)
-        logger.debug(f"Tensor shape with batch dimension: {img_tensor.shape}")
 
-        # --- REMOVED: No need to repeat channels ---
-        # if img_tensor.shape[1] == 1:
-        #      img_tensor = img_tensor.repeat(1, 3, 1, 1) # REMOVED
-
-        # 4. Run the model
         with torch.no_grad():
-            outputs = model(img_tensor)
+            outputs = chest_model(img_tensor)
             probabilities = torch.sigmoid(outputs).cpu().numpy()[0]
         logger.info("CheXNet model prediction obtained.")
 
-        # 5. Format the result
         results = {}
         threshold = 0.1
-        logger.debug(f"Model pathologies list: {model.pathologies}")
-        for i, pathology in enumerate(model.pathologies):
+        for i, pathology in enumerate(chest_model.pathologies):
             prob = float(probabilities[i])
             if prob >= threshold:
                 results[pathology] = round(prob, 3)
-                logger.debug(f"Detected: {pathology} (Probability: {prob:.3f})")
-
+        
         if not results:
-             logger.info(f"No pathologies found with probability >= {threshold}.")
              return {"analysis_results": {"status": f"No findings with probability >= {threshold}."}}
 
-        logger.info(f"Analysis complete. Found {len(results)} pathologies above threshold {threshold}.")
+        logger.info(f"CheXNet analysis complete. Found {len(results)} pathologies.")
         return {"analysis_results": results}
 
     except Exception as e:
         logger.exception(f"Error during CheXNet image analysis: {e}")
-        raise HTTPException(status_code=500, detail=f"AI model processing error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI model processing error (CheXNet): {e}")
+
+
+# --- NEW Analysis function for Fracture Detection ---
+def analyze_extremity_xray(image_bytes: bytes) -> dict:
+    """
+    Analyzes extremity x-ray for fractures using the custom model.
+    Replicates the exact preprocessing from the test script.
+    """
+    if fracture_model is None:
+        load_fracture_model()
+        if fracture_model is None:
+            raise HTTPException(status_code=503, detail="Fracture model is temporarily unavailable.")
+    
+    try:
+        logger.info("Starting image preprocessing for Fracture model (2 channels)...")
+        # 1. Open image and convert to 'LA' (2 channels)
+        image = Image.open(io.BytesIO(image_bytes)).convert('LA')
+
+        # 2. Replicate transformations from test script
+        tensor_img = TF.to_tensor(image) # Shape [2, H, W]
+        tensor_img = TF.resize(tensor_img, [224, 224]) # Shape [2, 224, 224]
+        inp = tensor_img.unsqueeze(0) # Shape [1, 2, 224, 224]
+
+        # 3. Replicate manual normalization
+        inp = (inp - 0.456) / 0.224
+        logger.debug(f"Fracture model input tensor shape: {inp.shape}")
+
+        # 4. Get prediction
+        with torch.no_grad():
+            output = fracture_model(inp)
+            prob = torch.sigmoid(output).item() # .item() as it's binary classification
+        
+        logger.info(f"Fracture model prediction obtained. Probability: {prob:.3f}")
+
+        # 5. Format result
+        threshold = 0.5 # Standard threshold for binary classification
+        finding = "Fracture detected" if prob > threshold else "No fracture detected"
+
+        return {
+            "analysis_results": {
+                "finding": finding,
+                "fracture_probability": round(prob, 3)
+            }
+        }
+    
+    except Exception as e:
+        logger.exception(f"Error during Fracture model image analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"AI model processing error (Fracture): {e}")
