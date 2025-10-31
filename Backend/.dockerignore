@@ -1,0 +1,15 @@
+Ignore python virtual environment
+
+venv/
+pycache/
+
+Ignore Git files
+
+.git
+.gitignore
+
+Ignore the large model file during the build process
+
+This path is relative to the Dockerfile
+
+app/services/models/model.pt

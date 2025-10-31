@@ -9,3 +9,6 @@ pandas
 lightgbm
 llama-cpp-python
 torchxrayvision
+pytorch-gradcam
+grad-cam
+opencv-python-headless
