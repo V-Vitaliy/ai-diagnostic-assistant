@@ -189,7 +189,7 @@ def analyze_extremity_xray(image_bytes: bytes) -> dict:
                 "heatmap_base64": heatmap_base64
             }
         }
-    
+
     except Exception as e:
         logger.exception(f"Error during Fracture model image analysis or CAM generation: {e}")
         raise HTTPException(status_code=500, detail=f"AI model processing error (Fracture/CAM): {e}")
