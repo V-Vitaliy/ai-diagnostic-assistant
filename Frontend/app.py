@@ -5,7 +5,9 @@ import requests  # Import the requests library for making API calls
 
 # --- Configuration Constants ---
 # Assuming the FastAPI backend is running on the specified service address
-API_URL = "http://backend:8080/analyze/"
+# BŁĄD POŁĄCZENIA: Pamiętaj, że ten adres działa TYLKO w sieci Dockera/Compose.
+# Upewnij się, że kontener 'backend' działa poprawnie.
+API_URL = "http://backend:8000/analyze/"
 ANALYSIS_TYPES = ["chest_xray", "unsupported_type"]  # Options available based on backend logic
 
 
@@ -24,7 +26,12 @@ def send_analysis_request(api_url, data, files):
         return response.json()
     except requests.exceptions.HTTPError as e:
         # Handle API error response (e.g., 400 Bad Request, 500 Internal Error)
-        error_detail = e.response.json().get('detail', f'Nieznany błąd HTTP: {e.response.text}')
+        # Attempt to get JSON detail if available
+        try:
+            error_detail = e.response.json().get('detail', f'Nieznany błąd HTTP: {e.response.text}')
+        except:
+            error_detail = f'Nieznany błąd HTTP: {e.response.text}'
+
         st.error(f"Błąd Analizy (Status: {e.response.status_code}): {error_detail}")
         return None
     except requests.exceptions.ConnectionError:
@@ -118,10 +125,61 @@ if submit_button:
                 st.success(
                     "Analiza zakończona sukcesem! Otrzymano odpowiedź z API.")  # Analysis completed successfully! Response received from API.
 
-                # Display results in an expander
-                # Zmodyfikowany fragment zgodnie z poleceniem: użycie st.json(results)
-                with st.expander("Zobacz Szczegółowe Wyniki Analizy (JSON)"):  # See Detailed Analysis Results (JSON)
-                    st.json(results) # <--- TUTAJ ZASTOSOWANO st.json()
+                st.subheader("Wyniki Analizy")  # Analysis Results
+
+                # --- Ustrukturyzowane wyświetlanie wyników na podstawie struktury z Backendu ---
+                try:
+                    patient_id_from_results = results.get('patient_id', 'N/A')
+                    analysis_type_from_results = results.get('analysis_type', 'N/A')
+                    image_results = results.get('image_analysis_results', {})
+                    llm_report = results.get('llm_report', 'Brak raportu LLM.')
+
+                    # 1. Metryki (Metrics) dla kontekstu
+                    col1, col2, col3 = st.columns(3)
+
+                    # Identyfikator pacjenta
+                    col1.metric("ID Pacjenta", patient_id_from_results)
+
+                    # Typ analizy
+                    col2.metric("Typ Analizy", analysis_type_from_results.replace('_', ' ').title())
+
+                    # Prawdopodobieństwo/Współczynnik ufności
+                    confidence = image_results.get('confidence')
+                    if isinstance(confidence, (int, float)):
+                        col3.metric("Ufność Modelu AI", f"{confidence * 100:.2f}%")
+                    else:
+                        col3.metric("Ufność Modelu AI", "N/A")
+
+                    # 2. Wyniki z modelu AI (CheXNet)
+                    st.markdown("### Wnioski Modelu AI (CheXNet)")
+                    finding = image_results.get('finding', 'Brak głównego znaleziska.')
+                    st.info(f"**Główne Znalezisko:** **{finding}**")
+
+                    location = image_results.get('location')
+                    if location:
+                        st.write(f"**Lokalizacja:** *{location}*")
+
+                    # Wyświetlanie innych kluczy z image_analysis_results, jeśli istnieją
+                    st.markdown("---")
+
+                    # 3. Raport LLM (chociaż jest to teraz placeholder)
+                    st.markdown("### Raport Generowany przez LLM")
+                    if llm_report and llm_report != "Report generation is not yet implemented.":
+                        st.success(llm_report)
+                    else:
+                        st.warning(f"Raport LLM: *{llm_report}*")
+                        st.caption(
+                            "Uwaga: Raport LLM jest obecnie placeholderem i musi zostać zaimplementowany w backendzie.")
+
+                    # Opcjonalnie: Pokaż surowy JSON w rozwijanym elemencie na potrzeby debugowania
+                    with st.expander("Zobacz Surowy Wynik JSON (Debugowanie)"):
+                        st.json(results)
+
+                except Exception as e:
+                    st.error(f"Nie można przetworzyć struktury odpowiedzi z backendu. Wystąpił błąd: {e}")
+                    st.markdown("Oto surowa odpowiedź JSON do wglądu:")
+                    st.json(results)
+                # --- Koniec ustrukturyzowanego wyświetlania ---
 
                 # Display the image again for user context
                 st.subheader("Przesłany Obraz:")  # Uploaded Image:
