@@ -119,8 +119,9 @@ if submit_button:
                     "Analiza zakończona sukcesem! Otrzymano odpowiedź z API.")  # Analysis completed successfully! Response received from API.
 
                 # Display results in an expander
+                # Zmodyfikowany fragment zgodnie z poleceniem: użycie st.json(results)
                 with st.expander("Zobacz Szczegółowe Wyniki Analizy (JSON)"):  # See Detailed Analysis Results (JSON)
-                    st.json(results)
+                    st.json(results) # <--- TUTAJ ZASTOSOWANO st.json()
 
                 # Display the image again for user context
                 st.subheader("Przesłany Obraz:")  # Uploaded Image:
