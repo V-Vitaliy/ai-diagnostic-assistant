@@ -11,11 +11,10 @@ from ...services.image_analysis import analyze_chest_xray, analyze_extremity_xra
 # from ...services.report_generation import generate_report
 # from ...services.patient_service import get_patient_history
 
-# Get the logger instance
+    #logger instance
 logger = logging.getLogger(__name__)
 
 # --- Create the APIRouter instance ---
-# This is crucial for main.py to find and include the routes
 router = APIRouter()
 
 
@@ -73,7 +72,6 @@ async def run_analysis(
             # Catch any other unexpected errors during AI processing
             logger.exception(f"Unexpected error during AI analysis execution: {e}")
             raise HTTPException(status_code=500, detail=f"Internal server error during AI analysis: {e}")
-    # ZMIANA: Dodanie nowej gałęzi elif dla "extremity_xray"
     elif analysis_type == "extremity_xray":
         try:
             logger.info("Calling extremity x-ray analysis service (analyze_extremity_xray)...")
@@ -90,7 +88,6 @@ async def run_analysis(
         except Exception as e:
             logger.exception(f"Unexpected error during AI analysis execution: {e}")
             raise HTTPException(status_code=500, detail=f"Internal server error during AI analysis: {e}")
-    # KONIEC ZMIANY elif analysis_type == "extremity_xray":
     else:
         # Handle cases where the analysis type is not supported yet
         logger.warning(f"Analysis type '{analysis_type}' is not supported yet.")
