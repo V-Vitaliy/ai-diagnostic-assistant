@@ -5,8 +5,6 @@ import requests  # Import the requests library for making API calls
 
 # --- Configuration Constants ---
 # Assuming the FastAPI backend is running on the specified service address
-# BŁĄD POŁĄCZENIA: Pamiętaj, że ten adres działa TYLKO w sieci Dockera/Compose.
-# Upewnij się, że kontener 'backend' działa poprawnie.
 API_URL = "http://backend:8000/analyze/"
 ANALYSIS_TYPES = ["chest_xray", "unsupported_type"]  # Options available based on backend logic
 
