@@ -1,31 +1,34 @@
-# backend/app/api/endpoints/analysis.py (Correct and Complete for Task B2)
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Depends
 from typing import Dict, Annotated
 import logging
 
 # --- Import the AI service function ---
-from ...services.image_analysis import analyze_chest_xray
+# ZMIANA: Dodanie importu dla analyze_extremity_xray
+from ...services.image_analysis import analyze_chest_xray, analyze_extremity_xray
+
 # --- Import placeholders for future use (commented out) ---
 # from ...services.report_generation import generate_report
 # from ...services.patient_service import get_patient_history
 
-# Get the logger instance
+    #logger instance
 logger = logging.getLogger(__name__)
 
 # --- Create the APIRouter instance ---
-# This is crucial for main.py to find and include the routes
 router = APIRouter()
+
+
 # ------------------------------------
 
 # Define the POST endpoint for the '/analyze/' path relative to the router prefix
 @router.post("/")
 async def run_analysis(
-    # Parameters without default values first
-    analysis_type: Annotated[str, Form(...)],
-    patient_id: Annotated[int, Form(...)],
-    image_file: Annotated[UploadFile, File(...)],
-    # Parameters with default values last
-    symptoms: Annotated[str, Form()] = ""
+        # Parameters without default values first
+        analysis_type: Annotated[str, Form(...)],
+        patient_id: Annotated[int, Form(...)],
+        image_file: Annotated[UploadFile, File(...)],
+        # Parameters with default values last
+        symptoms: Annotated[str, Form()] = ""
 ) -> Dict:
     """
     Receives image file, analysis type, patient ID, and symptoms.
@@ -43,7 +46,7 @@ async def run_analysis(
 
     # Initialize variables for results
     analysis_results = {}
-    llm_report = "Report generation is not yet implemented." # Placeholder
+    llm_report = "Report generation is not yet implemented."  # Placeholder
 
     # --- Route to the correct analysis based on type ---
     if analysis_type == "chest_xray":
@@ -69,6 +72,22 @@ async def run_analysis(
             # Catch any other unexpected errors during AI processing
             logger.exception(f"Unexpected error during AI analysis execution: {e}")
             raise HTTPException(status_code=500, detail=f"Internal server error during AI analysis: {e}")
+    elif analysis_type == "extremity_xray":
+        try:
+            logger.info("Calling extremity x-ray analysis service (analyze_extremity_xray)...")
+            # --- Call the new AI function from the service module ---
+            image_analysis_output = analyze_extremity_xray(image_bytes=image_contents)
+            # Extract the results dictionary safely using .get()
+            analysis_results = image_analysis_output.get("analysis_results", {})
+            # ------------------------------------------------------
+            logger.info(f"Extremity analysis completed successfully.")
+
+        except HTTPException as he:
+            logger.error(f"Error relayed from AI service: {he.detail}")
+            raise he
+        except Exception as e:
+            logger.exception(f"Unexpected error during AI analysis execution: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal server error during AI analysis: {e}")
     else:
         # Handle cases where the analysis type is not supported yet
         logger.warning(f"Analysis type '{analysis_type}' is not supported yet.")
@@ -89,8 +108,8 @@ async def run_analysis(
     final_result = {
         "patient_id": patient_id,
         "analysis_type": analysis_type,
-        "image_analysis_results": analysis_results, # Results from CheXNet
-        "llm_report": llm_report # Placeholder text for now
+        "image_analysis_results": analysis_results,  # Results from CheXNet / Extremity Model
+        "llm_report": llm_report  # Placeholder text for now
     }
     logger.info("Sending final analysis result to the client.")
     return final_result

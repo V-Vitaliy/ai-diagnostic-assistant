@@ -6,8 +6,6 @@ import base64  # Import base64 module for encoding images for HTML embedding
 
 # --- Configuration Constants ---
 # Assuming the FastAPI backend is running on the specified service address
-# CONNECTION NOTE: This address works ONLY within the Docker/Compose network.
-# Ensure the 'backend' container is running correctly.
 API_URL = "http://backend:8000/analyze/"
 ANALYSIS_TYPES = ["chest_xray", "unsupported_type"]  # Options available based on backend logic
 
