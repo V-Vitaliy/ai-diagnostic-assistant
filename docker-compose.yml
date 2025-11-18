@@ -7,7 +7,8 @@ services:
     ports:
       - "8080:8000"
     volumes:
-      - ./backend/app:/app
+      - ./Backend/app:/app
+      - ./bundles:/app/bundles
     depends_on:
       - db
     environment:
@@ -18,7 +19,9 @@ services:
     environment:
       POSTGRES_USER: myappuser 
       POSTGRES_PASSWORD: mysecretpassword 
-      POSTGRES_DB: myappdb 
+      POSTGRES_DB: myappdb
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data/
   frontend:
