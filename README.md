@@ -7,7 +7,7 @@ Aplikacja wykorzystuje architekturę mikrousług (Docker) oraz modele sztucznej 
 
 Główne funkcje systemu:
 
-- Analiza obrazów medycznych (RTG klatki piersiowej, RTG kończyn)  
+- Analiza obrazów medycznych (RTG, TK, itp.)  
 - Wykrywanie potencjalnych patologii (np. zapalenie płuc, złamania)  
 - Generowanie map ciepła (Grad-CAM), wskazujących obszary kluczowe dla modelu  
 - **W przyszłości:** integracja danych pacjenta oraz generowanie raportów tekstowych przy użyciu LLM  
