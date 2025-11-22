@@ -9,6 +9,7 @@ pandas
 huggingface_hub
 monai[fire]
 pytorch-ignite
+easyocr
 imageio
 nibabel
 lightgbm
