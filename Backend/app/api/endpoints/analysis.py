@@ -1,96 +1,111 @@
-# backend/app/api/endpoints/analysis.py (Correct and Complete for Task B2)
+# backend/app/api/endpoints/analysis.py
+# (Adds routing for brain_ct and handles temp file saving)
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Depends
 from typing import Dict, Annotated
 import logging
+import tempfile # For creating temporary files
+import os # For deleting temporary files
 
-# --- Import the AI service function ---
-from ...services.image_analysis import analyze_chest_xray
-# --- Import placeholders for future use (commented out) ---
-# from ...services.report_generation import generate_report
-# from ...services.patient_service import get_patient_history
+# --- Import ALL AI service functions ---
+from ...services.image_analysis import (
+    analyze_chest_xray, 
+    analyze_extremity_xray,
+    analyze_whole_body_ct_3d
 
-# Get the logger instance
+)
+
 logger = logging.getLogger(__name__)
-
-# --- Create the APIRouter instance ---
-# This is crucial for main.py to find and include the routes
 router = APIRouter()
-# ------------------------------------
 
-# Define the POST endpoint for the '/analyze/' path relative to the router prefix
 @router.post("/")
 async def run_analysis(
-    # Parameters without default values first
     analysis_type: Annotated[str, Form(...)],
     patient_id: Annotated[int, Form(...)],
     image_file: Annotated[UploadFile, File(...)],
-    # Parameters with default values last
     symptoms: Annotated[str, Form()] = ""
 ) -> Dict:
     """
-    Receives image file, analysis type, patient ID, and symptoms.
-    Calls the appropriate AI model (currently CheXNet for chest_xray).
-    Returns the structured analysis results. Corresponds to Task B2.
+    Receives data, routes to the appropriate AI model based on analysis_type,
+    and returns the analysis result.
     """
     logger.info(f"Received analysis request for patient {patient_id}. Type: {analysis_type}")
 
-    # --- Read image file ---
-    image_contents = await image_file.read()
-    if not image_contents:
-        logger.error("Error: Image file is empty.")
-        raise HTTPException(status_code=400, detail="Image file is empty.")
-    logger.info(f"Image file '{image_file.filename}' read successfully ({len(image_contents)} bytes).")
-
-    # Initialize variables for results
-    analysis_results = {}
+    image_analysis_output = {} 
     llm_report = "Report generation is not yet implemented." # Placeholder
-
-    # --- Route to the correct analysis based on type ---
-    if analysis_type == "chest_xray":
+    
+    # --- Logic for 2D PNG/JPG files  ---
+    if analysis_type in ["chest_xray", "extremity_xray"]:
+        image_contents = await image_file.read()
+        if not image_contents:
+            logger.error("Error: Image file is empty.")
+            raise HTTPException(status_code=400, detail="Image file is empty.")
+        
         try:
-            logger.info("Calling chest x-ray analysis service (analyze_chest_xray)...")
-            # --- Call the AI function from the service module ---
-            image_analysis_output = analyze_chest_xray(image_bytes=image_contents)
-            # Extract the results dictionary safely using .get()
-            analysis_results = image_analysis_output.get("analysis_results", {})
-            # --------------------------------------------------
-            logger.info(f"Image analysis completed successfully.")
-
-            # --- Placeholder for future LLM call ---
-            # prompt_data = { ... }
-            # llm_report = generate_report(prompt_data)
-            # --------------------------------------
+            if analysis_type == "chest_xray":
+                logger.info("Routing to chest x-ray analysis service...")
+                image_analysis_output = analyze_chest_xray(image_bytes=image_contents)
+            
+            elif analysis_type == "extremity_xray":
+                logger.info("Routing to extremity (fracture) analysis service...")
+                image_analysis_output = analyze_extremity_xray(image_bytes=image_contents)
+            
+            logger.info(f"2D Image analysis completed successfully for type: {analysis_type}.")
 
         except HTTPException as he:
-            # If the AI service raised an HTTPException, pass it through
-            logger.error(f"Error relayed from AI service: {he.detail}")
-            raise he
+             logger.error(f"Error relayed from AI service: {he.detail}")
+             raise he
         except Exception as e:
-            # Catch any other unexpected errors during AI processing
-            logger.exception(f"Unexpected error during AI analysis execution: {e}")
-            raise HTTPException(status_code=500, detail=f"Internal server error during AI analysis: {e}")
+            logger.exception(f"Unexpected error during 2D analysis: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal server error during 2D analysis: {e}")
+
+    # --- NEW Logic for 3D .nii.gz files ---
+    elif analysis_type == "whole_body_ct":
+        if not image_file.filename.endswith(('.nii', '.nii.gz')):
+            raise HTTPException(status_code=400, detail="Invalid file type for brain_ct. Expected .nii or .nii.gz")
+
+        # Save 3D file to a temporary location
+        temp_file_path = None
+        try:
+            # Create a named temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=image_file.filename) as tmp:
+                await tmp.write(await image_file.read())
+                temp_file_path = tmp.name # Get the path
+            
+            logger.info(f"3D file saved to temporary path: {temp_file_path}")
+
+            # Call the AI service with the FILE PATH
+            image_analysis_output = analyze_whole_body_ct_3d(temp_file_path=temp_file_path)
+            
+            logger.info(f"3D Image analysis (MONAI) completed successfully.")
+        
+        except HTTPException as he:
+             logger.error(f"Error relayed from 3D AI service: {he.detail}")
+             raise he
+        except Exception as e:
+            logger.exception(f"Unexpected error during 3D analysis: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal server error during 3D analysis: {e}")
+        finally:
+            # Clean up the temporary file
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+                logger.info(f"Temporary file {temp_file_path} deleted.")
+
     else:
-        # Handle cases where the analysis type is not supported yet
+        # Handle unsupported analysis types
         logger.warning(f"Analysis type '{analysis_type}' is not supported yet.")
         raise HTTPException(
             status_code=400,
             detail=f"Analysis type '{analysis_type}' is not supported yet."
         )
+    # --- End of Router Logic ---
 
-    # --- Placeholder for future database saving ---
-    # try:
-    #     logger.info(f"Saving analysis result for patient {patient_id}...")
-    #     # await save_analysis_result(patient_id=patient_id, ...)
-    # except Exception as e:
-    #     logger.exception(f"Error saving result to database: {e}")
-    # ---------------------------------------------
-
-    # --- Construct the final response ---
+    # Construct the final response
     final_result = {
         "patient_id": patient_id,
         "analysis_type": analysis_type,
-        "image_analysis_results": analysis_results, # Results from CheXNet
-        "llm_report": llm_report # Placeholder text for now
+        "image_analysis_results": image_analysis_output.get("analysis_results", {}),
+        "llm_report": llm_report
     }
     logger.info("Sending final analysis result to the client.")
     return final_result

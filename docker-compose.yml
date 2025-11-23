@@ -8,7 +8,8 @@ services:
       - "8080:8000"
 
     volumes:
-      - ./backend:/app
+      - ./Backend/app:/app
+      - ./bundles:/app/bundles
     depends_on:
       - db
     environment:
