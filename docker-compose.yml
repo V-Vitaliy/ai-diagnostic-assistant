@@ -6,19 +6,24 @@ services:
       context: ./backend
     ports:
       - "8080:8000"
+
     volumes:
-      - ./backend/app:/app
+      - ./backend:/app
     depends_on:
       - db
     environment:
       DATABASE_URL: postgresql+asyncpg://myappuser:mysecretpassword@db:5432/myappdb
+
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
   db:
     image: postgres:14-alpine
     restart: always
     environment:
       POSTGRES_USER: myappuser 
       POSTGRES_PASSWORD: mysecretpassword 
-      POSTGRES_DB: myappdb 
+      POSTGRES_DB: myappdb
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data/
   frontend:
@@ -27,7 +32,7 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      - ./frontend/app:/app
+      - ./frontend:/app
     depends_on:
       - backend
       - db

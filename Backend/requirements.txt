@@ -12,3 +12,10 @@ torchxrayvision
 pytorch-gradcam
 grad-cam
 opencv-python-headless
+pydantic-settings
+sqlalchemy
+asyncpg
+python-dotenv
+psycopg2-binary
+
+
