@@ -14,6 +14,7 @@ from ...services.image_analysis import (
     analyze_whole_body_ct_3d
 
 )
+from ...services.ocr_service import analyze_blood_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,7 +36,7 @@ async def run_analysis(
     llm_report = "Report generation is not yet implemented." # Placeholder
     
     # --- Logic for 2D PNG/JPG files  ---
-    if analysis_type in ["chest_xray", "extremity_xray"]:
+    if analysis_type in ["chest_xray", "extremity_xray","ocr"]:
         image_contents = await image_file.read()
         if not image_contents:
             logger.error("Error: Image file is empty.")
@@ -49,7 +50,11 @@ async def run_analysis(
             elif analysis_type == "extremity_xray":
                 logger.info("Routing to extremity (fracture) analysis service...")
                 image_analysis_output = analyze_extremity_xray(image_bytes=image_contents)
-            
+
+            elif analysis_type == "ocr":
+                logger.info("Routing to OCR blood analysis service...")
+                image_analysis_output = analyze_blood_image(image_bytes=image_contents)
+
             logger.info(f"2D Image analysis completed successfully for type: {analysis_type}.")
 
         except HTTPException as he:
