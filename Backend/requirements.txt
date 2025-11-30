@@ -7,7 +7,6 @@ torchvision
 scikit-learn
 pandas
 lightgbm
-llama-cpp-python
 torchxrayvision
 pytorch-gradcam
 grad-cam
@@ -17,5 +16,7 @@ sqlalchemy
 asyncpg
 python-dotenv
 psycopg2-binary
+alembic
+
 
 
