@@ -1,163 +1,207 @@
-import os
-import asyncio
+import json
 import logging
-import warnings
+from typing import List, Dict, Any, Optional
+
+# --- Google AI Imports ---
 from google.genai import types
 from google.adk.agents import Agent
 from google.adk.runners import InMemoryRunner
 from google.adk.tools import AgentTool, google_search
 
+# --- ADK Session Interface Handling ---
 try:
-    from prompt_builder import format_findings, format_patient_info
+    from google.adk.sessions import SessionService, Session
 except ImportError:
-    print("⚠️ Warning: prompt_builder.py not found. Using raw strings.")
-    def format_findings(x): return str(x)
-    def format_patient_info(x): return str(x)
-
-warnings.filterwarnings("ignore")
-logging.basicConfig(level=logging.ERROR)
-
-MODEL_NAME = "gemini-2.0-flash"
-
-try:
-    if not os.environ.get("GOOGLE_API_KEY"):
-        # os.environ["GOOGLE_API_KEY"] = "AIzaSy..."
+    # Fallback if SDK version differs
+    class Session:
+        def __init__(self, session_id, history=None, state=None):
+            self.session_id = session_id
+            self.history = history or []
+            self.state = state or {}
+    class SessionService:
         pass
 
-    if not os.environ.get("GOOGLE_API_KEY"):
-        raise ValueError("❌ GOOGLE_API_KEY environment variable is not set.")
+# --- Database Imports ---
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from app.db.models import ChatSession, Patient
 
-    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
-    print("✅ Setup complete. API Key detected.")
-except Exception as e:
-    print(f"Authentication Error: {e}")
-    exit()
+# --- Utility Imports ---
+# Fixed the import path to be absolute
+from app.services.prompt_builder import format_patient_info
 
-# --- Badacz ---
-def create_research_agent(model_name: str) -> Agent:
+logger = logging.getLogger(__name__)
+
+MODEL_NAME = "gemini-2.0-flash-exp"
+
+# ==========================================
+# 1. SESSION SERVICE (DB CONNECTION)
+# ==========================================
+class PostgresSessionService(SessionService):
+    """
+    Connects Google ADK Runners to PostgreSQL database.
+    """
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def load(self, session_id: str) -> Session:
+        """Loads session history and state from DB."""
+        query = select(ChatSession).where(ChatSession.session_id == session_id)
+        result = await self.db.execute(query)
+        db_session = result.scalar_one_or_none()
+
+        if not db_session:
+            return Session(session_id=session_id, history=[], state={})
+
+        try:
+            # Deserialize History
+            raw_history = json.loads(db_session.history_json or "[]")
+            restored_history = []
+
+            for msg in raw_history:
+                parts = []
+                if "parts" in msg:
+                    for p in msg["parts"]:
+                        if isinstance(p, dict) and "text" in p:
+                            parts.append(types.Part(text=p["text"]))
+                        elif isinstance(p, str):
+                             parts.append(types.Part(text=p))
+
+                content = types.Content(role=msg["role"], parts=parts)
+                restored_history.append(content)
+
+            # Deserialize State
+            restored_state = json.loads(db_session.state_json or "{}")
+
+            return Session(
+                session_id=session_id,
+                history=restored_history,
+                state=restored_state
+            )
+
+        except Exception as e:
+            logger.error(f"Error loading session {session_id}: {e}")
+            return Session(session_id=session_id, history=[], state={})
+
+    async def save(self, session: Session):
+        """Saves session history and state to DB."""
+        query = select(ChatSession).where(ChatSession.session_id == session.session_id)
+        result = await self.db.execute(query)
+        db_session = result.scalar_one_or_none()
+
+        if not db_session:
+            logger.warning(f"Attempt to save non-existent session {session.session_id}")
+            return
+
+        # Serialize History
+        serialized_history = []
+        for content in session.history:
+            parts_data = []
+            for part in content.parts:
+                if part.text:
+                    parts_data.append({"text": part.text})
+
+            serialized_history.append({
+                "role": content.role,
+                "parts": parts_data
+            })
+
+        db_session.history_json = json.dumps(serialized_history, ensure_ascii=False)
+        db_session.state_json = json.dumps(session.state, ensure_ascii=False)
+
+        await self.db.commit()
+
+# ==========================================
+# 2. AGENT DEFINITIONS
+# ==========================================
+def create_research_agent() -> Agent:
     return Agent(
         name="AgentBadacz",
-        model=model_name,
+        model=MODEL_NAME,
         instruction="""
-        Jesteś analitykiem medycznym (Medical Researcher). 
-        Twoim jedynym zadaniem jest weryfikacja faktów (Fact-Checking) przy użyciu narzędzia `Google Search`.
-        
-        TWOJE ZADANIE:
-        1. Otrzymasz objawy pacjenta i wstępne wyniki analizy AI.
-        2. Wyszukaj w Google aktualne wytyczne medyczne i protokoły.
-        3. Sprawdź korelacje: Czy te objawy są typowe dla wykrytej patologii?
-        4. Sprawdź sprzeczności: Czy wyniki AI mogą być błędem (fałszywie dodatnie) w kontekście objawów?
-        
-        FORMAT WYJŚCIOWY (Zwróć tylko to):
-        - WERYFIKACJA: [Potwierdzone / Sprzeczne / Niepewne]
-        - ANALIZA RÓŻNICOWA: [Jakie inne choroby dają takie objawy?]
-        - CZERWONE FLAGI: [Ostrzeżenia o zagrożeniu życia lub błędach AI]
-        - ŹRÓDŁA: [Linki do znalezionych artykułów medycznych]
+        Role: Medical Researcher.
+        Task: Verify symptoms and findings using Google Search.
+        Output: Fact-based verification only.
         """,
         tools=[google_search],
         output_key="research_findings",
     )
 
-# --- Lekarz ---
-def create_writer_agent(model_name: str) -> Agent:
+def create_writer_agent() -> Agent:
     return Agent(
         name="AgentLekarz",
-        model=model_name,
-        instruction="""
-        Jesteś doświadczonym lekarzem specjalistą.
-        Twoim zadaniem jest napisanie końcowego raportu dla pacjenta i lekarza prowadzącego.
-        
-        DANE WEJŚCIOWE:
-        - Przeczytaj wyniki badań dostarczone przez Agenta Badacza: {research_findings}
-        - Uwzględnij kontekst pacjenta przekazany w rozmowie.
-        
-        INSTRUKCJE DOTYCZĄCE RAPORTU:
-        1. Język: POLSKI. Ton: Profesjonalny, ale zrozumiały, empatyczny.
-        2. Nie stawiaj ostatecznej diagnozy (jesteś AI), używaj fraz: "Obraz może sugerować...", "Wskazana konsultacja...".
-        3. Jeśli Agent Badacz znalazł sprzeczności, wyraźnie zaznacz to w sekcji "UWAGI".
-        
-        STRUKTURA RAPORTU:
-        ### 1. PODSUMOWANIE ANALIZY
-        (Krótki opis tego, co wykryło AI i jak to się ma do objawów)
-        
-        ### 2. PRAWDOPODOBNE ROZPOZNANIE (Diagnostyka różnicowa)
-        (Lista możliwych przyczyn uszeregowana od najbardziej prawdopodobnych)
-        
-        ### 3. REKOMENDACJE I DALSZE KROKI
-        (Konkretne badania do wykonania: np. TK, morfologia, konsultacja kardiologiczna)
-        """,
-    )
-
-# --- Orchestrator ---
-async def run_medical_orchestrator(symptoms: str, findings: dict, patient_info: dict):
-    print("\n🚀 Uruchamianie Systemu Diagnostycznego...")
-
-    formatted_findings = format_findings(findings)
-    formatted_patient = format_patient_info(patient_info)
-
-    researcher = create_research_agent(MODEL_NAME)
-    writer = create_writer_agent(MODEL_NAME)
-
-    root_agent = Agent(
-        name="KoordynatorMedyczny",
         model=MODEL_NAME,
         instruction="""
-        Jesteś Głównym Koordynatorem Diagnostycznym. Zarządzasz procesem analizy przypadku medycznego.
-        
-        TWOJA PROCEDURA (Wykonaj krok po kroku):
-        1. Wywołaj narzędzie `AgentBadacz`, aby zweryfikować spójność objawów z wynikami analizy AI. Przekaż mu dane pacjenta.
-        2. Po otrzymaniu analizy od badacza, wywołaj narzędzie `AgentLekarz`, aby wygenerował końcowy raport PDF/Tekst.
-        3. Jako swoją ostateczną odpowiedź zwróć TYLKO treść wygenerowaną przez `AgentLekarz`.
+        Role: Medical Doctor.
+        Task: Provide professional response in Polish based on research.
         """,
-        tools=[
-            AgentTool(researcher),
-            AgentTool(writer)
-        ]
     )
 
-    user_task = f"""
-    ANALIZA PRZYPADKU MEDYCZNEGO:
-    
-    --- DANE PACJENTA ---
-    {formatted_patient}
-    
-    --- ZGŁOSZONE OBJAWY ---
-    "{symptoms}"
-    
-    --- WYNIKI ANALIZY OBRAZOWEJ (AI) ---
-    {formatted_findings}
-    
-    Rozpocznij procedurę badawczą (Krok 1: Weryfikacja, Krok 2: Raport).
+# ==========================================
+# 3. WORKFLOW (ORCHESTRATOR)
+# ==========================================
+async def run_chat_workflow(
+    session_id: str,
+    user_message: str,
+    db: AsyncSession
+) -> str:
+    # 1. Get Chat Session
+    query = select(ChatSession).where(ChatSession.session_id == session_id)
+    result = await db.execute(query)
+    chat_db_obj = result.scalar_one_or_none()
+
+    if not chat_db_obj:
+        return "Błąd: Sesja nie istnieje."
+
+    # 2. Get Patient Data
+    pat_query = select(Patient).where(Patient.id == chat_db_obj.patient_id)
+    pat_res = await db.execute(pat_query)
+    patient = pat_res.scalar_one()
+
+    # 3. Format Context (INCLUDING MEDICATIONS)
+    patient_text = format_patient_info({
+        "age": 2025 - patient.birth_date.year,
+        "chronic_diseases": patient.chronic_diseases,
+        "allergies": patient.allergies,
+        "medications": patient.medications # <--- Added this field!
+    })
+
+    root_instruction = f"""
+    Jesteś Asystentem Medycznym.
+    PACJENT: {patient_text}
     """
 
-    print("🔄 Przetwarzanie danych...")
+    # 4. Load History & State
+    session_service = PostgresSessionService(db)
+    current_session = await session_service.load(session_id)
 
-    runner = InMemoryRunner(agent=root_agent)
-    response = await runner.run_debug(user_task)
-
-    return response
-
-async def main():
-    test_symptoms = "Silny ból zamostkowy, promieniujący do lewej ręki, zimne poty."
-
-    test_findings = {
-        "Cardiomegaly": 0.85,
-        "Pneumonia": 0.12,
-        "heatmap_path": "/tmp/heat.png"
-    }
-
-    test_patient = {
-        "age": 62,
-        "gender": "Mężczyzna",
-        "chronic_diseases": ["Nadciśnienie", "Cukrzyca typu 2"],
-        "allergies": ["Penicylina"]
-    }
-
-    await run_medical_orchestrator(
-        symptoms=test_symptoms,
-        findings=test_findings,
-        patient_info=test_patient
+    # 5. Initialize Root Agent
+    root_agent = Agent(
+        name="Koordynator",
+        model=MODEL_NAME,
+        instruction=root_instruction,
+        tools=[AgentTool(create_research_agent()), AgentTool(create_writer_agent())]
     )
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # 6. Run
+    runner = InMemoryRunner(
+        agent=root_agent,
+        history=current_session.history,
+        state=current_session.state
+    )
+
+    print(f"🤖 Agent running for {session_id}...")
+    try:
+        response = await runner.run(user_message)
+        final_text = response.text
+    except Exception as e:
+        logger.error(f"LLM Error: {e}")
+        return "Wystąpił błąd podczas generowania odpowiedzi."
+
+    # 7. Save
+    current_session.history = runner.history
+    current_session.state = runner.state or {}
+
+    await session_service.save(current_session)
+
+    return final_text
