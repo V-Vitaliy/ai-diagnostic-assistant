@@ -5,11 +5,9 @@ from sqlalchemy import Integer, ForeignKey, func, DateTime
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 import uuid
 
-from ..base import Base
-
+from app.db.base import Base
 
 class ChatSession(Base):
-
     __tablename__ = 'chat_sessions'
 
     session_id: Mapped[uuid.UUID] = mapped_column(
@@ -25,25 +23,18 @@ class ChatSession(Base):
         nullable=True
     )
 
-    history_json: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB)
-    state_json: Mapped[Dict[str, Any]] = mapped_column(JSONB)
+    history_json: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, default=list)
+    state_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=func.now(),
         onupdate=func.now()
     )
-
-
     patient: Mapped["Patient"] = relationship(back_populates="chat_sessions")
-
     analysis_result: Mapped[Optional["AnalysisResult"]] = relationship(
         back_populates="chat_sessions"
     )
 
     def __repr__(self):
-
-        return (
-            f"ChatSession(id={self.session_id}, patient_id={self.patient_id}, "
-            f"analysis_id={self.analysis_id})"
-        )
+        return f"ChatSession(id={self.session_id}, patient_id={self.patient_id})"

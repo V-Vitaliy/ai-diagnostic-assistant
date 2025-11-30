@@ -1,36 +1,25 @@
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
 
+class AnalysisCreate(BaseModel):
+    """
+    Schema for initiating an analysis.
+    Note: The image file is handled separately via UploadFile.
+    """
+    patient_id: int
+    analysis_type: str
+    symptoms_input: str
 
-class AnalysisResultBase(BaseModel):
-
-
-    analysis_type: str = Field(..., max_length=100)
-
-
-    image_storage_path: str = Field(..., description="Путь к файлу изображения в хранилище")
-
-
-    symptoms_input: str = Field(..., description="Симптомы, введенные врачом")
-
-
-    raw_model_outputs: Dict[str, Any] = Field(..., description="Сырые данные JSON от модели AI")
-
-
-    llm_report: str = Field(..., description="Конечный текстовый отчет от LLM")
-
-
-
-    heatmap_base64: str = Field(..., description="Изображение карты тепла в Base64")
-
-    patient_id: int = Field(..., description="ID пациента, к которому относится анализ")
-
-class AnalysisResultCreate(AnalysisResultBase):
-    pass
-
-class AnalysisResultRead(AnalysisResultBase):
-
+class AnalysisResponse(BaseModel):
+    """Schema for returning analysis results to the frontend."""
     id: int
+    patient_id: int
+    analysis_type: str
+    image_storage_path: str
+    heatmap_base64: Optional[str] = None # Base64 string for frontend display
+    llm_report: Optional[str] = None
+    created_at: datetime
 
     class Config:
-        from_attributes = True  
+        from_attributes = True

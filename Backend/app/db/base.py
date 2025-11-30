@@ -6,11 +6,5 @@ from typing import Any
 
 class Base(AsyncAttrs, DeclarativeBase):
 
-
     __abstract__ = True
 
-
-    metadata: Any
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)

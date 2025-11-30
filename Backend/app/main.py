@@ -15,12 +15,8 @@ from .api.endpoints.chat_sessions import router as chat_sessions_router
 
 from .db.deps import get_db as get_db_dependency
 
-
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AI Diagnostic Assistant API")
-
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -28,7 +24,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Application ready to accept requests.")
     yield
     logger.info("Shutting down application...")
-
 
 app = FastAPI(
     title="AI Diagnostic Assistant API",
@@ -54,7 +49,6 @@ def read_root():
 async def check_db_connection(db: AsyncSession = Depends(get_db_dependency)):
 
     try:
-        # Ваш асинхронный запрос к базе данных
         result = await db.execute(text("SELECT 1"))
         one = result.scalar_one()
 

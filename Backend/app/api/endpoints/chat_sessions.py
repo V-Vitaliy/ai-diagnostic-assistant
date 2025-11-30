@@ -1,74 +1,102 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from pydantic import BaseModel
 import uuid
+import json
+from datetime import datetime
 
+# Импортируем подключение к БД
+from app.db.session import get_db
+# Импортируем модели
+from app.db.models.chat_session import ChatSession
+from app.db.models.patient import Patient
+# Импортируем схемы (которые мы создали)
+from app.schemas.chat import ChatSessionCreate, ChatSessionResponse
 
-from ...db.deps import get_db
-from ...schemas.chat_session import ChatSessionRead, ChatSessionCreate, ChatSessionBase
-from ...services import chat_session_service
+router = APIRouter()
 
+class MessageRequest(BaseModel):
+    session_id: str
+    message: str
 
-router = APIRouter(
-    prefix="/chats",
-    tags=["Chat Sessions"]
-)
-
-
-
-
-@router.post("/", response_model=ChatSessionRead, status_code=status.HTTP_201_CREATED)
-def create_chat_session_endpoint(
-    session_data: ChatSessionCreate,
-    db: Session = Depends(get_db)
+@router.post("/session/init", response_model=ChatSessionResponse)
+async def init_chat_session(
+    request: ChatSessionCreate,
+    db: AsyncSession = Depends(get_db)
 ):
 
-    db_session = chat_session_service.create_chat_session(db, session_data)
-    return db_session
+    result = await db.execute(select(Patient).where(Patient.id == request.patient_id))
+    patient = result.scalar_one_or_none()
 
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
 
-@router.get("/{session_id}", response_model=ChatSessionRead)
-def get_session_by_uuid_endpoint(
-    session_id: uuid.UUID,
-    db: Session = Depends(get_db)
+    query = (
+        select(ChatSession)
+        .where(ChatSession.patient_id == request.patient_id)
+        .order_by(ChatSession.updated_at.desc())
+    )
+    result = await db.execute(query)
+    existing_session = result.scalar_one_or_none()
+
+    if existing_session:
+        return {
+            "session_id": existing_session.session_id,
+            "patient_id": patient.id,
+            "history_json": existing_session.history_json or [],
+            "patient_name": patient.name,
+            "updated_at": existing_session.updated_at
+        }
+    else:
+        new_session_id = uuid.uuid4()
+        new_session = ChatSession(
+            session_id=new_session_id,
+            patient_id=request.patient_id,
+            analysis_id=request.analysis_id,
+            history_json=[],
+            state_json={}
+        )
+        db.add(new_session)
+        await db.commit()
+        await db.refresh(new_session)
+
+        return {
+            "session_id": new_session_id,
+            "patient_id": patient.id,
+            "history_json": [],
+            "patient_name": patient.name,
+            "updated_at": new_session.updated_at
+        }
+
+@router.post("/message")
+async def send_message(
+    request: MessageRequest,
+    db: AsyncSession = Depends(get_db)
 ):
 
-    db_session = chat_session_service.get_session_by_uuid(db, session_id)
-    if db_session is None:
-        raise HTTPException(status_code=404, detail="Chat session not found")
-    return db_session
+    query = select(ChatSession).where(ChatSession.session_id == request.session_id)
+    result = await db.execute(query)
+    session = result.scalar_one_or_none()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    current_history = list(session.history_json) if session.history_json else []
+
+    user_msg = {"role": "user", "parts": [{"text": request.message}]}
+    current_history.append(user_msg)
+
+    bot_msg = {
+        "role": "model",
+        "parts": [{"text": f"Система: Я получил ваше сообщение '{request.message}'. AI сервис пока отключен, но запись в БД работает!"}]
+    }
+    current_history.append(bot_msg)
 
 
-@router.get("/patient/{patient_id}", response_model=List[ChatSessionRead])
-def get_sessions_by_patient_endpoint(
-    patient_id: int,
-    db: Session = Depends(get_db)
-):
+    session.history_json = current_history
+    session.updated_at = datetime.now()
 
-    sessions = chat_session_service.get_sessions_by_patient(db, patient_id)
-    return sessions
+    await db.commit()
 
-
-@router.put("/{session_id}", response_model=ChatSessionRead)
-def update_chat_session_endpoint(
-    session_id: uuid.UUID,
-    session_update: ChatSessionBase,
-    db: Session = Depends(get_db)
-):
-
-    updated_session = chat_session_service.update_chat_session(db, session_id, session_update)
-    if updated_session is None:
-        raise HTTPException(status_code=404, detail="Chat session not found")
-    return updated_session
-
-
-@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_chat_session_endpoint(
-    session_id: uuid.UUID,
-    db: Session = Depends(get_db)
-):
-
-    deleted_session = chat_session_service.delete_chat_session(db, session_id)
-    if deleted_session is None:
-        raise HTTPException(status_code=404, detail="Chat session not found")
-    return
+    return {"response": bot_msg["parts"][0]["text"]}

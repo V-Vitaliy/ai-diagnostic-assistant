@@ -1,52 +1,49 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import List
 
+from app.db.session import get_db
+from app.db.models.patient import Patient
+from app.schemas import PatientCreate, PatientResponse
 
+router = APIRouter()
 
-from ...db.deps import get_db
-from ...schemas.patient import PatientRead, PatientCreate
-from ...services.patient_service import create_patient, get_patient, get_patients
+@router.post("/", response_model=PatientResponse)
+async def create_patient(patient: PatientCreate, db: AsyncSession = Depends(get_db)):
+    """
+    Create a new patient in the database.
+    """
+    new_patient = Patient(
+        name=patient.name,
+        birth_date=patient.birth_date,
+        chronic_diseases=patient.chronic_diseases,
+        allergies=patient.allergies,
+        medications=patient.medications,
+        height_cm=patient.height_cm,
+        weight_kg=patient.weight_kg
+    )
+    db.add(new_patient)
+    await db.commit()
+    await db.refresh(new_patient)
+    return new_patient
 
+@router.get("/", response_model=List[PatientResponse])
+async def get_patients(db: AsyncSession = Depends(get_db)):
+    """
+    Get all patients.
+    """
+    result = await db.execute(select(Patient))
+    return result.scalars().all()
 
-router = APIRouter(
-    prefix="/patients",
-    tags=["Patients"]
-)
+@router.get("/{patient_id}", response_model=PatientResponse)
+async def get_patient(patient_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Get a specific patient by ID.
+    """
+    result = await db.execute(select(Patient).where(Patient.id == patient_id))
+    patient = result.scalar_one_or_none()
 
-
-
-
-@router.post("/", response_model=PatientRead, status_code=status.HTTP_201_CREATED)
-def create_patient_endpoint(
-    patient_data: PatientCreate,
-    db: Session = Depends(get_db)
-):
-
-    db_patient = create_patient(db, patient_data)
-    return db_patient
-
-
-@router.get("/", response_model=List[PatientRead])
-def get_patients_list_endpoint(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db)
-):
-
-    patients = get_patients(db, skip=skip, limit=limit)
-    return patients
-
-
-@router.get("/{patient_id}", response_model=PatientRead)
-def get_patient_endpoint(
-    patient_id: int,
-    db: Session = Depends(get_db)
-):
-
-    db_patient = get_patient(db, patient_id)
-    if db_patient is None:
-
+    if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
-    return db_patient
-
+    return patient
