@@ -5,7 +5,7 @@ from sqlalchemy import select, update, delete, func
 
 
 from ..db.models.chat_session import ChatSession
-from ..schemas.chat_session import ChatSessionCreate, ChatSessionBase
+from ..schemas.chat import ChatSessionCreate, ChatSessionBase
 
 
 
