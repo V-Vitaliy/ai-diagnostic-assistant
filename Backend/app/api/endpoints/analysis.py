@@ -4,6 +4,7 @@ import logging
 import shutil
 import os
 import uuid
+import base64
 
 # --- Database Imports ---
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +13,7 @@ from app.db.session import get_db
 from app.db.models.analysis_result import AnalysisResult
 from app.db.models.patient import Patient
 
-# --- Import ALL AI service functions ---
-# Ensure these imports match your project structure
+# --- AI Service Imports ---
 from app.services.image_analysis import (
     analyze_chest_xray,
     analyze_extremity_xray,
@@ -25,9 +25,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Local directory to save uploaded images (Crucial for DB and Chat history)
+# Directories
 UPLOAD_DIR = "app/static/uploads"
+HEATMAP_DIR = "app/static/heatmaps"
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(HEATMAP_DIR, exist_ok=True)
 
 @router.post("/")
 async def run_analysis(
@@ -35,115 +38,100 @@ async def run_analysis(
     patient_id: Annotated[int, Form(...)],
     image_file: Annotated[UploadFile, File(...)],
     symptoms: Annotated[str, Form()] = "",
-    db: AsyncSession = Depends(get_db) # <--- Injected DB Session
+    db: AsyncSession = Depends(get_db)
 ) -> Dict[str, Any]:
-    """
-    1. Receives data.
-    2. Validates Patient in DB.
-    3. Saves file permanently (for Chat history).
-    4. Routes to the appropriate AI model.
-    5. Saves result to Database.
-    """
-    logger.info(f"Received analysis request for patient {patient_id}. Type: {analysis_type}")
 
-    # --- 1. Validate Patient (Database Check) ---
+    logger.info(f"Start Analysis: Patient {patient_id}, Type {analysis_type}")
+
+    # 1. Validate Patient
     result = await db.execute(select(Patient).where(Patient.id == patient_id))
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Patient not found")
 
-    # --- 2. Save file to disk PERMANENTLY ---
-    # We need a permanent path for the database, so the Chat Agent can reference it later.
+    # 2. Generate UUID for the analysis (We use this for filenames too)
+    analysis_uuid = uuid.uuid4()
+
+    # 3. Save Source File
     original_ext = image_file.filename.split(".")[-1] if "." in image_file.filename else "png"
-    unique_filename = f"{uuid.uuid4()}.{original_ext}"
-    file_path = f"{UPLOAD_DIR}/{unique_filename}"
+    # Use the analysis UUID for the filename
+    source_filename = f"{analysis_uuid}.{original_ext}"
+    file_path = f"{UPLOAD_DIR}/{source_filename}"
 
-    # Read file content
     file_content = await image_file.read()
-
     if not file_content:
-        raise HTTPException(status_code=400, detail="Image file is empty.")
+        raise HTTPException(status_code=400, detail="Empty file")
 
-    # Write to disk
     with open(file_path, "wb") as buffer:
         buffer.write(file_content)
 
-    logger.info(f"File saved permanently to: {file_path}")
-
-    # --- 3. Run AI Analysis ---
+    # 4. Run AI Analysis
     image_analysis_output = {}
-    llm_report = "Report generation is not yet implemented." # Placeholder
+    llm_report = "Report pending (Chat with AI to generate)."
 
     try:
-        # Logic for 2D PNG/JPG files
-        if analysis_type in ["chest_xray", "extremity_xray", "ocr"]:
-
-            if analysis_type == "chest_xray":
-                logger.info("Routing to chest x-ray analysis service...")
-                image_analysis_output = analyze_chest_xray(image_bytes=file_content)
-
-            elif analysis_type == "extremity_xray":
-                logger.info("Routing to extremity (fracture) analysis service...")
-                image_analysis_output = analyze_extremity_xray(image_bytes=file_content)
-
-            elif analysis_type == "ocr":
-                logger.info("Routing to OCR blood analysis service...")
-                image_analysis_output = analyze_blood_image(image_bytes=file_content)
-
-            logger.info(f"2D Image analysis completed successfully.")
-
-        # Logic for 3D .nii.gz files
+        if analysis_type == "chest_xray":
+            image_analysis_output = analyze_chest_xray(image_bytes=file_content)
+        elif analysis_type == "extremity_xray":
+            image_analysis_output = analyze_extremity_xray(image_bytes=file_content)
+        elif analysis_type == "ocr":
+            image_analysis_output = analyze_blood_image(image_bytes=file_content)
         elif analysis_type == "whole_body_ct":
-            if not image_file.filename.endswith(('.nii', '.nii.gz')):
-                raise HTTPException(status_code=400, detail="Invalid file type for whole_body_ct.")
-
-            logger.info("Routing to 3D Whole Body CT analysis service...")
-
-            # NOTE: We pass the PERMANENT file path now.
             image_analysis_output = analyze_whole_body_ct_3d(temp_file_path=file_path)
-
-            logger.info(f"3D Image analysis (MONAI) completed successfully.")
-
         else:
-            logger.warning(f"Analysis type '{analysis_type}' is not supported yet.")
-            raise HTTPException(status_code=400, detail=f"Analysis type '{analysis_type}' is not supported.")
+            image_analysis_output = {"error": "Type not supported"}
 
-    except HTTPException as he:
-         logger.error(f"Error relayed from AI service: {he.detail}")
-         raise he
     except Exception as e:
-        logger.exception(f"Unexpected error during AI analysis: {e}")
-        # We catch error but proceed to save the attempt to DB as failed/empty
-        image_analysis_output = {"error": str(e)}
+        logger.error(f"AI Service Failed: {e}")
+        image_analysis_output = {"error": str(e), "status": "failed"}
 
-    # --- 4. Save to Database (ENABLED) ---
-    # Now we save the result so the Chat Agent can see it later.
+    # 5. Handle Heatmap (Save to Disk)
+    # Extract inner results
+    final_data = image_analysis_output.get("analysis_results", image_analysis_output)
 
-    # Extract inner results if nested
-    final_output_data = image_analysis_output.get("analysis_results", image_analysis_output)
+    heatmap_base64 = final_data.get("heatmap_base64", "")
+    heatmap_storage_path = None
 
+    if heatmap_base64:
+        try:
+            heatmap_bytes = base64.b64decode(heatmap_base64)
+            # Filename: uuid_heatmap.png
+            heatmap_filename = f"{analysis_uuid}_heatmap.png"
+            heatmap_full_path = f"{HEATMAP_DIR}/{heatmap_filename}"
+
+            with open(heatmap_full_path, "wb") as f:
+                f.write(heatmap_bytes)
+
+            heatmap_storage_path = heatmap_full_path
+            logger.info(f"Heatmap saved to: {heatmap_storage_path}")
+
+            # Clean up JSON
+            if "heatmap_base64" in final_data:
+                del final_data["heatmap_base64"]
+
+        except Exception as e:
+            logger.error(f"Failed to save heatmap image: {e}")
+
+    # 6. Save to Database
     new_analysis = AnalysisResult(
+        id=analysis_uuid, # Explicitly setting UUID
         patient_id=patient_id,
         analysis_type=analysis_type,
         symptoms_input=symptoms,
-        image_storage_path=file_path, # Path to the saved file
-        raw_model_outputs=final_output_data,
-        llm_report=llm_report,
-        heatmap_base64="" # You can map this if your AI returns a heatmap string
+        image_storage_path=file_path,
+        heatmap_storage_path=heatmap_storage_path, # Path instead of blob
+        raw_model_outputs=final_data,
+        llm_report=llm_report
     )
 
     db.add(new_analysis)
     await db.commit()
     await db.refresh(new_analysis)
 
-    logger.info(f"Analysis result saved to Database with ID: {new_analysis.id}")
-
-    # --- 5. Construct Response ---
-    final_result = {
-        "id": new_analysis.id, # Returning DB ID is crucial for the Frontend
+    return {
+        "id": new_analysis.id,
         "patient_id": patient_id,
         "analysis_type": analysis_type,
-        "image_analysis_results": final_output_data,
+        "image_analysis_results": final_data,
+        "heatmap_storage_path": heatmap_storage_path,
         "llm_report": llm_report
     }
-
-    return final_result

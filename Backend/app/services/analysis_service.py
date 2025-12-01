@@ -7,7 +7,7 @@ from sqlalchemy import select, update, delete, func
 
 
 from ..db.models.analysis_result import AnalysisResult
-from ..schemas.analysis_result import AnalysisResultBase, AnalysisResultRead, AnalysisResultCreate
+from ..schemas.analysis import AnalysisResultBase, AnalysisResultRead, AnalysisResultCreate
 
 def create_analysis_result(db: Session, analysis_data: AnalysisResultCreate) -> AnalysisResult :
     db_analysis = AnalysisResult(**analysis_data.model_dump())

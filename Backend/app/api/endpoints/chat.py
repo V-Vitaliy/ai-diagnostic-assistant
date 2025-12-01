@@ -3,22 +3,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 import uuid
-import json
-from datetime import datetime
 
-# Импортируем подключение к БД
 from app.db.session import get_db
-# Импортируем модели
 from app.db.models.chat_session import ChatSession
 from app.db.models.patient import Patient
-# Импортируем схемы (которые мы создали)
 from app.schemas.chat import ChatSessionCreate, ChatSessionResponse
+
+# --- ГЛАВНОЕ ИЗМЕНЕНИЕ: Импортируем реальный сервис ---
+# Убедитесь, что в llm_service.py исправлены импорты (from app.services...)
+from app.services.llm_service import run_chat_workflow
 
 router = APIRouter()
 
 class MessageRequest(BaseModel):
     session_id: str
     message: str
+
+class MessageResponse(BaseModel):
+    response: str
 
 @router.post("/session/init", response_model=ChatSessionResponse)
 async def init_chat_session(
@@ -69,34 +71,25 @@ async def init_chat_session(
             "updated_at": new_session.updated_at
         }
 
-@router.post("/message")
+@router.post("/message", response_model=MessageResponse)
 async def send_message(
     request: MessageRequest,
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Sends the massage to Google Gemini.
+    """
+    try:
 
-    query = select(ChatSession).where(ChatSession.session_id == request.session_id)
-    result = await db.execute(query)
-    session = result.scalar_one_or_none()
+        ai_response_text = await run_chat_workflow(
+            session_id=request.session_id,
+            user_message=request.message,
+            db=db
+        )
 
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        return {"response": ai_response_text}
 
-    current_history = list(session.history_json) if session.history_json else []
-
-    user_msg = {"role": "user", "parts": [{"text": request.message}]}
-    current_history.append(user_msg)
-
-    bot_msg = {
-        "role": "model",
-        "parts": [{"text": f"Система: Я получил ваше сообщение '{request.message}'. AI сервис пока отключен, но запись в БД работает!"}]
-    }
-    current_history.append(bot_msg)
-
-
-    session.history_json = current_history
-    session.updated_at = datetime.now()
-
-    await db.commit()
-
-    return {"response": bot_msg["parts"][0]["text"]}
+    except Exception as e:
+        import logging
+        logging.error(f"AI Service Error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")

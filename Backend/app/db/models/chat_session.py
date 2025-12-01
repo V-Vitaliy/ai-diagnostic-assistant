@@ -18,7 +18,8 @@ class ChatSession(Base):
 
     patient_id: Mapped[int] = mapped_column(ForeignKey('patients.id'))
 
-    analysis_id: Mapped[Optional[int]] = mapped_column(
+    # UPDATED: Foreign Key is now UUID to match AnalysisResult.id
+    analysis_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey('analysis_results.id'),
         nullable=True
     )
@@ -31,10 +32,13 @@ class ChatSession(Base):
         default=func.now(),
         onupdate=func.now()
     )
+
+    # Relationships
     patient: Mapped["Patient"] = relationship(back_populates="chat_sessions")
+
     analysis_result: Mapped[Optional["AnalysisResult"]] = relationship(
         back_populates="chat_sessions"
     )
 
     def __repr__(self):
-        return f"ChatSession(id={self.session_id}, patient_id={self.patient_id})"
+        return f"ChatSession(id={self.session_id})"

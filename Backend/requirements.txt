@@ -23,6 +23,8 @@ asyncpg
 python-dotenv
 psycopg2-binary
 alembic
+google-genai
+google-adk
 
 
 

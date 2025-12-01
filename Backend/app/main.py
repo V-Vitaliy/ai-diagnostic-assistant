@@ -1,68 +1,42 @@
 import logging
 from fastapi import FastAPI, Depends
 from sqlalchemy import text
-
-from ..app.api.endpoints import analysis, patients
-from ..app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
+from app.db.session import get_db
+from app.api.endpoints import analysis, patients, chat
 
-
-from .api.endpoints.analysis import router as analysis_router
-from .api.endpoints.patients import router as patients_router
-from .api.endpoints.chat_sessions import router as chat_sessions_router
-
-
-
-from .db.deps import get_db as get_db_dependency
-
+# Logger Setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AI Diagnostic Assistant API")
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    logger.info("Starting FastAPI application...")
-    logger.info("Application ready to accept requests.")
-    yield
-    logger.info("Shutting down application...")
 
 app = FastAPI(
     title="AI Diagnostic Assistant API",
     description="API for analyzing medical data using AI models.",
-    version="0.1.0",
-    lifespan=lifespan
+    version="0.1.0"
 )
 
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting FastAPI application...")
+    logger.info("Application ready to accept requests.")
 
-app.include_router(analysis_router, prefix="/analyze", tags=["Analysis Functions"])
-app.include_router(patients_router, prefix="/patients", tags=["Patient Management"])
-app.include_router(chat_sessions_router, prefix="/chats", tags=["Chat Sessions"])
-
+# --- Register Routers ---
+app.include_router(analysis.router, prefix="/analyze", tags=["Analysis Functions"])
+app.include_router(patients.router, prefix="/patients", tags=["Patient Management"])
+app.include_router(chat.router, prefix="/chat", tags=["AI Chat"])
 
 @app.get("/", tags=["Root"])
 def read_root():
     logger.info("Request to root endpoint /")
     return {"message": "Welcome to the AI Diagnostic Assistant API!"}
 
-
 @app.get("/check-db-connection/", tags=["Testing"])
-
-async def check_db_connection(db: AsyncSession = Depends(get_db_dependency)):
-
+async def check_db_connection(db: AsyncSession = Depends(get_db)):
     try:
         result = await db.execute(text("SELECT 1"))
         one = result.scalar_one()
-
-        return {
-            "status": "success",
-            "message": f"Successfully connected to DB and ran query. Result: {one}"
-        }
-
+        return {"status": "success", "message": f"Connected to DB. Result: {one}"}
     except Exception as e:
         logger.error(f"DB connection failed: {e}")
-        return {
-            "status": "error",
-            "message": f"DB connection failed: {e}"
-        }
+        return {"status": "error", "message": str(e)}
