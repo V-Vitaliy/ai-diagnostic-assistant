@@ -1,7 +1,7 @@
 import requests
 import os
 
-# --- КОНФИГУРАЦИЯ ---
+
 BASE_API_URL = os.environ.get("BACKEND_URL", "http://backend:8000")
 BASE_EXTERNAL_URL = os.environ.get("EXTERNAL_BACKEND_URL", "http://localhost:8080")
 
@@ -15,7 +15,7 @@ def get_heatmap_url(storage_path: str) -> str:
     relative_path = storage_path.replace("app/", "")
     return f"{BASE_EXTERNAL_URL}/{relative_path.lstrip('/')}"
 
-# --- ФУНКЦИИ МАТВЕЯ (Пациенты) ---
+
 
 def fetch_patients():
     """Fetches all patients list (GET)"""
@@ -51,7 +51,7 @@ def init_chat_session(patient_id):
         print(f"Błąd inicjalizacji sesji: {e}")
         return None
 
-# --- ВАШИ ФУНКЦИИ (Чат и Файлы) ---
+
 
 def send_chat_message(session_id: str, message: str):
     url = get_full_api_url("chat/message")

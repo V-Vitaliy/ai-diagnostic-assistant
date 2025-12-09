@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # --- CSS TO HIDE SIDEBAR ---
-# Это скроет автоматическое меню навигации Streamlit
+
 st.markdown("""
 <style>
     [data-testid="stSidebar"] {display: none;}
