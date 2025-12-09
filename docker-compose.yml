@@ -31,7 +31,7 @@ services:
       - postgres_data:/var/lib/postgresql/data/
   frontend:
     build:
-      context: ./frontend
+      context: ./Frontend
     ports:
       - "8501:8501"
     volumes:
@@ -39,6 +39,8 @@ services:
     depends_on:
       - backend
       - db
+    environment:
+          - BACKEND_URL=http://backend:8000
 volumes:
   postgres_data:
     driver: local
