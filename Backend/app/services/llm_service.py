@@ -45,7 +45,7 @@ from app.services.prompt_builder import format_patient_info, format_findings
 
 
 logger = logging.getLogger(__name__)
-MODEL_NAME = "gemini-2.5-flash-lite"
+MODEL_NAME = "gemini-2.5-flash"
 # max messages to keep in stored history
 MAX_STORED_HISTORY = 40
 
@@ -240,13 +240,14 @@ def create_writer_agent() -> Agent:
         """,
     )
 
+
 # ==========================================
 # 3. WORKFLOW (ORCHESTRATOR)
 # ==========================================
 async def run_chat_workflow(
-    session_id: str,
-    user_message: str,
-    db: AsyncSession
+        session_id: str,
+        user_message: str,
+        db: AsyncSession
 ) -> str:
     # 1. Ensure ChatSession exists
     query = select(ChatSession).where(ChatSession.session_id == session_id)
@@ -266,30 +267,32 @@ async def run_chat_workflow(
     # --- FIX 1: LOAD ANALYSIS DATA (Inject into context) ---
     analysis_text = "Brak dostępnych wyników analizy."
 
-    # Check if session has specific analysis linked, otherwise find latest
+     # Check if this session is linked to a specific analysis OR find the latest one for patient
     target_analysis_id = chat_db_obj.analysis_id
 
     if target_analysis_id:
         analysis_query = select(AnalysisResult).where(AnalysisResult.id == target_analysis_id)
     else:
-        # Fallback: get latest analysis for patient
-        analysis_query = select(AnalysisResult).where(AnalysisResult.patient_id == patient.id).order_by(AnalysisResult.id.desc())
+        # Fallback: get latest analysis for patient based on CREATION DATE (Fixing random sort issue)
+        analysis_query = select(AnalysisResult).where(AnalysisResult.patient_id == patient.id).order_by(AnalysisResult.created_at.desc())
 
     analysis_res = await db.execute(analysis_query)
     last_analysis = analysis_res.scalars().first()
 
     if last_analysis:
-
         formatted_results = format_findings(last_analysis.raw_model_outputs)
+        symptoms_text = last_analysis.symptoms_input or "Brak zgłoszonych objawów"
 
         analysis_text = f"""
         ID Badania: {last_analysis.id}
         Typ: {last_analysis.analysis_type}
-        
-        === SZCZEGÓŁOWE WYNIKI ANALIZY AI ===
+
+        === OBJAWY ZGŁOSZONE PRZEZ UŻYTKOWNIKA (SYMPTOMS) ===
+        "{symptoms_text}"
+
+       === SZCZEGÓŁOWE WYNIKI ANALIZY AI (FINDINGS) ===
         {formatted_results}
-        
-        Raport Systemowy: {last_analysis.llm_report}
+
         """
     # 3. Format Context (Patient + Analysis)
     age = None
@@ -307,21 +310,23 @@ async def run_chat_workflow(
 
     root_instruction = f"""
     Jesteś Głównym Koordynatorem Medycznym.
-    
+
     === DANE PACJENTA ===
     {patient_text}
-    
+
     === OSTATNIE WYNIKI BADAŃ (CONTEXT) ===
     {analysis_text}
-    
+
     TWOJE ZADANIE:
     Koordynuj pracę agentów 'AgentBadacz' i 'AgentLekarz' w celu postawienia diagnozy.
-    
+
     ZASADY DZIAŁANIA:
+    Zarządzaj agentami Badacz i Lekarz. Jeśli użytkownik pyta o analizę, użyj danych z sekcji WYNIKI BADAŃ.
+    Szczególną uwagę zwróć na sekcję "OBJAWY" - porównaj ją z wynikami AI.
     1. Jeśli w sekcji WYNIKI BADAŃ widzisz wysokie prawdopodobieństwo patologii (>50%), ZAWSZE wywołaj 'AgentBadacz', aby zweryfikował te wyniki w Google (szukaj wytycznych leczenia i objawów).
     2. Po weryfikacji, poproś 'AgentLekarz' o napisanie podsumowania klinicznego.
     3. Nie mów "nie mam danych". Dane są powyżej w sekcji CONTEXT.
-    
+
     Język: Polski.
     """
 
@@ -329,7 +334,7 @@ async def run_chat_workflow(
     session_service = PostgresSessionService(db)
     current_session = await session_service.load(session_id)
 
-   # 5. Initialize Sub-Agents
+    # 5. Initialize Sub-Agents
     research_agent = create_research_agent()
     writer_agent = create_writer_agent()
     research_tool = AgentTool(agent=research_agent)
@@ -365,36 +370,36 @@ async def run_chat_workflow(
 
         # --- FIX 2: PARSE RESPONSE (Get clean text) ---
         final_text = ""
+        try:
+            # Check if response is string directly
+            if isinstance(response, str):
+                final_text = response
+            # Check if response is standard ADK object with text attribute
+            elif hasattr(response, "text") and response.text:
+                final_text = response.text
+            # Check if response is a LIST of events (common in ADK debug mode)
+            elif isinstance(response, list):
+                # Iterate backwards to find the final model output or tool output
+                for event in reversed(response):
+                    if hasattr(event, "content") and event.content.parts:
+                        for part in event.content.parts:
+                            # Check for plain text
+                            if hasattr(part, "text") and part.text:
+                                if event.content.role == "model":
+                                    final_text = part.text
+                                    break
+                            # Check for function response (if agent didn't summarize)
+                            if hasattr(part, "function_response") and part.function_response:
+                                resp = part.function_response.response
+                                if isinstance(resp, dict) and "result" in resp:
+                                    final_text = resp["result"]
+                                    break
+                    if final_text: break
 
-        # Check if response is string directly
-        if isinstance(response, str):
-            final_text = response
-        # Check if response is standard ADK object with text attribute
-        elif hasattr(response, "text") and response.text:
-            final_text = response.text
-        # Check if response is a LIST of events (common in ADK debug mode)
-        elif isinstance(response, list):
-            # Iterate backwards to find the final model output or tool output
-            for event in reversed(response):
-                # Try to find standard text part
-                if hasattr(event, "content") and event.content.parts:
-                    for part in event.content.parts:
-                        # Check for plain text
-                        if hasattr(part, "text") and part.text:
-                            # Heuristic: Avoid returning user prompt or tool call args as answer
-                            if event.content.role == "model":
-                                final_text = part.text
-                                break
-                        # Check for function response (if agent didn't summarize)
-                        if hasattr(part, "function_response") and part.function_response:
-                            resp = part.function_response.response
-                            if isinstance(resp, dict) and "result" in resp:
-                                final_text = resp["result"]
-                                break
-                if final_text: break
-
-        # Fallback
-        if not final_text:
+            # Fallback
+            if not final_text:
+                final_text = str(response)
+        except Exception:
             final_text = str(response)
 
         # Update History Manually

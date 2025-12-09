@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 import uuid
+import json
 
 from app.db.session import get_db
 from app.db.models.chat_session import ChatSession
@@ -43,10 +44,25 @@ async def init_chat_session(
     existing_session = result.scalar_one_or_none()
 
     if existing_session:
+
+        history_data = existing_session.history_json
+
+
+        if isinstance(history_data, str):
+            try:
+                history_data = json.loads(history_data)
+            except json.JSONDecodeError:
+                history_data = []
+
+
+        elif history_data is None:
+            history_data = []
+
+
         return {
             "session_id": existing_session.session_id,
             "patient_id": patient.id,
-            "history_json": existing_session.history_json or [],
+            "history_json": history_data,
             "patient_name": patient.name,
             "updated_at": existing_session.updated_at
         }

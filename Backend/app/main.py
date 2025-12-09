@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.api.endpoints import analysis, patients, chat
+from fastapi.staticfiles import StaticFiles
 
 # Logger Setup
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +22,7 @@ async def startup_event():
     logger.info("Starting FastAPI application...")
     logger.info("Application ready to accept requests.")
 
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # --- Register Routers ---
 app.include_router(analysis.router, prefix="/analyze", tags=["Analysis Functions"])
 app.include_router(patients.router, prefix="/patients", tags=["Patient Management"])
