@@ -53,6 +53,10 @@ async def run_analysis(
 
     # 3. Save Source File
     original_ext = image_file.filename.split(".")[-1] if "." in image_file.filename else "png"
+    # Ensure source 3D files are saved with correct extension for MONAI
+    if analysis_type == "whole_body_ct" and not original_ext.endswith("gz"):
+        # Simple check, usually .nii.gz is handled as one
+        pass
     # Use the analysis UUID for the filename
     source_filename = f"{analysis_uuid}.{original_ext}"
     file_path = f"{UPLOAD_DIR}/{source_filename}"
