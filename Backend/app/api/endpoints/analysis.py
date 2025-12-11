@@ -70,7 +70,6 @@ async def run_analysis(
 
     # 4. Run AI Analysis
     image_analysis_output = {}
-    llm_report = "Report pending (Chat with AI to generate)."
 
     try:
         if analysis_type == "chest_xray":
@@ -124,7 +123,6 @@ async def run_analysis(
         image_storage_path=file_path,
         heatmap_storage_path=heatmap_storage_path, # Path instead of blob
         raw_model_outputs=final_data,
-        llm_report=llm_report
     )
 
     db.add(new_analysis)
@@ -137,5 +135,4 @@ async def run_analysis(
         "analysis_type": analysis_type,
         "image_analysis_results": final_data,
         "heatmap_storage_path": heatmap_storage_path,
-        "llm_report": llm_report
     }

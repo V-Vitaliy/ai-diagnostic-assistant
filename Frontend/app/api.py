@@ -57,7 +57,7 @@ def send_chat_message(session_id: str, message: str):
     url = get_full_api_url("chat/message")
     payload = {"session_id": session_id, "message": message}
     try:
-        response = requests.post(url, json=payload, timeout=1024)
+        response = requests.post(url, json=payload, timeout=6000)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:

@@ -14,7 +14,7 @@ services:
       - db
     environment:
       DATABASE_URL: postgresql+asyncpg://myappuser:mysecretpassword@db:5432/myappdb
-      GOOGLE_API_KEY: "AIzaSyCYSsSWpod0_26ZD-B9tTEEnNpk_QSI_6E"
+      GOOGLE_API_KEY: "AIzaSyBcHAwnWKDB-sXan_KZ76hBCQCw1n-sTQs"
       GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
 
     command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

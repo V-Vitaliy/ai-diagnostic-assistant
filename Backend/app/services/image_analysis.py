@@ -167,7 +167,7 @@ def analyze_chest_xray(image_bytes: bytes) -> dict:
 
         # --- 4. Format results ---
         results = {}
-        threshold = 0.1 # Probability threshold
+        threshold = 0.4 # Probability threshold
         probabilities_np = probabilities.detach().numpy()[0] # Convert to numpy for iteration
 
         for i, pathology in enumerate(chest_model.pathologies):
