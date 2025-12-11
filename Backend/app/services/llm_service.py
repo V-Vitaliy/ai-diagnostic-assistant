@@ -51,7 +51,6 @@ MODELS_PRIORITY = [
     "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
-    "gemini-1.5-pro",
 ]
 MAX_STORED_HISTORY = 40
 
@@ -277,7 +276,22 @@ class PostgresSessionService(SessionService):
             return Session(session_id=session_id, history=[], state={})
 
         try:
-            raw_history = json.loads(db_session.history_json or "[]")
+            # --- FIX: Robust Loading (Handle List vs String) ---
+            # SQLAlchemy with JSONB usually returns a list, but sometimes (e.g. legacy data) it might be a string.
+            raw_data = db_session.history_json
+            if isinstance(raw_data, list):
+                raw_history = raw_data
+            else:
+                # If None, empty list. If string, parse it.
+                raw_history = json.loads(raw_data or "[]")
+                # Extra safety against double-encoded JSON strings
+                if isinstance(raw_history, str):
+                    raw_history = json.loads(raw_history)
+
+            # Ensure we have a list before passing to deserializer
+            if not isinstance(raw_history, list):
+                raw_history = []
+
             restored_history = deserialize_history(raw_history)
             restored_state = json.loads(db_session.state_json or "{}")
             return Session(session_id=session_id, history=restored_history, state=restored_state)
@@ -295,11 +309,46 @@ class PostgresSessionService(SessionService):
             logger.error("Attempt to save non-existent session %s", session_id)
             return
 
-        serialized_history = serialize_history(manual_history, limit=MAX_STORED_HISTORY)
-        db_session.history_json = json.dumps(serialized_history, ensure_ascii=False)
+        # --- FIX: Smart Merge Strategy (Preserve Custom Fields) ---
+        # 1. Get existing raw history (the "Truth" with file_label, heatmaps, etc.)
+        raw_existing = db_session.history_json
+        if isinstance(raw_existing, str):
+            try: raw_existing = json.loads(raw_existing)
+            except: raw_existing = []
+        if not isinstance(raw_existing, list):
+            raw_existing = []
 
+        # 2. Determine what's new
+        # We assume manual_history starts with what was loaded.
+        # So we just need to append the difference.
+        existing_count = len(raw_existing)
+        total_count = len(manual_history)
+
+        final_history = []
+
+        if total_count >= existing_count:
+            # Take the existing "rich" history as base
+            final_history = list(raw_existing)
+
+            # Serialize only the NEW messages
+            new_msgs = manual_history[existing_count:]
+            if new_msgs:
+                new_serialized = serialize_history(new_msgs, limit=9999) # limit irrelevant here
+                final_history.extend(new_serialized)
+        else:
+            # Fallback: If history shrank (unlikely in append-only chat),
+            # or if reset happened, we have to overwrite.
+            # But this means losing custom fields for now.
+            final_history = serialize_history(manual_history, limit=MAX_STORED_HISTORY)
+
+        # 3. Apply Limit (Sliding Window)
+        if len(final_history) > MAX_STORED_HISTORY:
+            final_history = final_history[-MAX_STORED_HISTORY:]
+
+        # 4. Save
+        db_session.history_json = final_history
         state_dict = serialize_state_safe(runner)
-        db_session.state_json = json.dumps(state_dict, ensure_ascii=False)
+        db_session.state_json = state_dict
 
         await self.db.commit()
 

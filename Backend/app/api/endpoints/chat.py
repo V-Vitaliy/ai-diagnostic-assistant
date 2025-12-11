@@ -4,6 +4,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 import uuid
 import json
+import logging
 
 from app.db.session import get_db
 from app.db.models.chat_session import ChatSession
@@ -11,8 +12,9 @@ from app.db.models.patient import Patient
 from app.schemas.chat import ChatSessionCreate, ChatSessionResponse
 
 # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: Импортируем реальный сервис ---
-# Убедитесь, что в llm_service.py исправлены импорты (from app.services...)
 from app.services.llm_service import run_chat_workflow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,25 +46,45 @@ async def init_chat_session(
     existing_session = result.scalar_one_or_none()
 
     if existing_session:
+        # --- FIX: STRICT TYPE CHECKING & PARSING ---
+        raw_history = existing_session.history_json
+        final_history = []
 
-        history_data = existing_session.history_json
+        # Логируем тип данных для отладки
+        logger.info(f"Session {existing_session.session_id} raw_history type: {type(raw_history)}")
 
+        if raw_history is not None:
+            # Случай 1: SQLAlchemy уже вернула список (для JSON полей)
+            if isinstance(raw_history, list):
+                final_history = raw_history
 
-        if isinstance(history_data, str):
-            try:
-                history_data = json.loads(history_data)
-            except json.JSONDecodeError:
-                history_data = []
+            # Случай 2: Пришла строка или байты (Text поле или сырой JSON)
+            elif isinstance(raw_history, (str, bytes)):
+                try:
+                    parsed = json.loads(raw_history)
 
+                    # Защита от двойного кодирования (строка внутри строки: "[...]")
+                    if isinstance(parsed, str):
+                        parsed = json.loads(parsed)
 
-        elif history_data is None:
-            history_data = []
+                    if isinstance(parsed, list):
+                        final_history = parsed
+                    else:
+                        logger.warning(f"Parsed history is not a list, got: {type(parsed)}")
+                        final_history = []
+                except Exception as e:
+                    logger.error(f"Error parsing history_json string: {e}")
+                    final_history = []
 
+            # Случай 3: Неизвестный тип
+            else:
+                logger.warning(f"Unexpected history_json type: {type(raw_history)}")
+                final_history = []
 
         return {
             "session_id": existing_session.session_id,
             "patient_id": patient.id,
-            "history_json": history_data,
+            "history_json": final_history,
             "patient_name": patient.name,
             "updated_at": existing_session.updated_at
         }
@@ -96,7 +118,6 @@ async def send_message(
     Sends the massage to Google Gemini.
     """
     try:
-
         ai_response_text = await run_chat_workflow(
             session_id=request.session_id,
             user_message=request.message,
@@ -106,6 +127,5 @@ async def send_message(
         return {"response": ai_response_text}
 
     except Exception as e:
-        import logging
-        logging.error(f"AI Service Error: {e}")
+        logger.error(f"AI Service Error: {e}")
         raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")

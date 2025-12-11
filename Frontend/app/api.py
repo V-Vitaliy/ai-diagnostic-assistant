@@ -64,10 +64,22 @@ def send_chat_message(session_id: str, message: str):
         print(f"Error sending message: {e}")
         raise e
 
-def analyze_file(patient_id: str, analysis_type: str, file_name: str, file_bytes: bytes, symptoms: str):
+def analyze_file(patient_id: str, session_id: str, analysis_type: str, file_name: str, file_bytes: bytes, symptoms: str):
+    """
+    Sends file for analysis.
+    UPDATED: Now accepts session_id to link the analysis with chat history.
+    """
     url = get_full_api_url("analyze/")
     files = {'image_file': (file_name, file_bytes, 'application/octet-stream')}
-    data = {'analysis_type': analysis_type, 'patient_id': patient_id, 'symptoms': symptoms}
+
+    # Добавили session_id в данные формы
+    data = {
+        'analysis_type': analysis_type,
+        'patient_id': patient_id,
+        'session_id': session_id,
+        'symptoms': symptoms
+    }
+
     try:
         response = requests.post(url, data=data, files=files, timeout=120)
         response.raise_for_status()
