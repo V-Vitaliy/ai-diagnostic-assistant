@@ -50,7 +50,7 @@ chest_model_target_layer = None #  Added target layer
 
 def load_chest_model():
     """Loads the CheXNet model, transforms, and target layer on the first call."""
-    global chest_model, chest_transform, chest_model_target_layer # <-- UPDATED
+    global chest_model, chest_transform, chest_model_target_layer
     if chest_model is None:
         try:
             logger.info("Loading pre-trained CheXNet model (densenet121-res224-all)...")
@@ -58,22 +58,30 @@ def load_chest_model():
             chest_model.eval()
 
             # ---Define the target layer for Grad-CAM ---
-            # We target the last layer of the 'features' block
             chest_model_target_layer = [chest_model.features[-1]]
-
             logger.info("CheXNet model and target layer loaded successfully.")
 
-            # Transforms for CheXNet (1-channel input, normalized to [0, 1])
-            chest_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.Grayscale(num_output_channels=1),
-                transforms.ToTensor(), # Scales image pixels to the range [0.0, 1.0]
-            ])
-            logger.info("Transforms for CheXNet configured.")
         except Exception as e:
-            logger.error(f"CRITICAL ERROR: Failed to load CheXNet model: {e}")
-            raise RuntimeError(f"Failed to load AI model (CheXNet): {e}")
+            # --- AUTO-FIX FOR CORRUPTED CACHE ---
+            logger.warning(f"Initial load failed: {e}. Checking for corrupted cache...")
+            try:
+                # Try to locate and delete the corrupted file
+                cache_dir = os.path.expanduser("~/.torchxrayvision/models_data")
+                weight_file = os.path.join(cache_dir, "densenet121-res224-all.pt")
+
+                if os.path.exists(weight_file):
+                    logger.info(f"Removing corrupted cache file: {weight_file}")
+                    os.remove(weight_file)
+
+                logger.info("Retrying download and load...")
+                chest_model = xrv.models.DenseNet(weights="densenet121-res224-all")
+                chest_model.eval()
+                chest_model_target_layer = [chest_model.features[-1]]
+                logger.info("CheXNet model loaded successfully after retry.")
+
+            except Exception as e2:
+                logger.error(f"CRITICAL ERROR: Failed to load CheXNet model after retry: {e2}")
+                raise RuntimeError(f"Failed to load AI model (CheXNet): {e2}")
 
 # --- Fracture Model & Transforms ---
 fracture_model = None
@@ -107,38 +115,55 @@ def convert_to_base64(image: Image.Image) -> str:
     return img_str
 
 # ---
-# --- ***  CHEST X-RAY ANALYSIS FUNCTION *** ---
+# --- *** FIXED CHEST X-RAY ANALYSIS FUNCTION *** ---
 # ---
 def analyze_chest_xray(image_bytes: bytes) -> dict:
     """
-    Analyzes chest x-ray for pathologies AND generates a Grad-CAM heatmap
-    for the pathology with the highest probability.
+    Analyzes chest x-ray for pathologies AND generates a Grad-CAM heatmap.
+    FIXED: Now uses correct normalization range (-1024 to 1024) expected by TorchXRayVision.
     """
-    # 1. Load model if not already loaded
-    if chest_model is None or chest_transform is None:
+    if chest_model is None:
         load_chest_model()
-        if chest_model is None or chest_transform is None:
+        if chest_model is None:
              raise HTTPException(status_code=503, detail="CheXNet model is temporarily unavailable.")
 
     try:
-        # 2. Preprocess the image
-        logger.info("Starting image preprocessing for CheXNet (1 channel)...")
+        # 1. Load Image
         image = Image.open(io.BytesIO(image_bytes)).convert('L') # Grayscale
-        img_tensor_norm = chest_transform(image) # Normalized tensor [0, 1]
 
-        # We need the 3-channel version for visualization later
-        vis_rgb = cv2.cvtColor(np.array(image.resize((224, 224))), cv2.COLOR_GRAY2RGB)
-        vis_rgb = np.float32(vis_rgb) / 255
+        # 2. Geometric Transform (Resize & Crop)
+        # We apply this first so both Visualization and Tensor get the exact same crop
+        geom_transform = transforms.Compose([
+            transforms.Resize(224),
+            transforms.CenterCrop(224)
+        ])
+        image_cropped = geom_transform(image)
 
-        # Add batch dimension
-        img_tensor_norm = img_tensor_norm.unsqueeze(0) # Add batch: [1, 1, 224, 224]
+        # Convert to numpy for further processing
+        image_np = np.asarray(image_cropped)
 
-        # ---    Enable gradients for Grad-CAM ---
-        img_tensor_norm.requires_grad_(True)
+        # 3. Normalization for TorchXRayVision (CRITICAL FIX)
+        # XRV expects input values roughly in range [-1024, 1024]
+        # Previous code used ToTensor() which gave [0, 1], causing the model to see "black"
+        img_norm = xrv.datasets.normalize(image_np, 255) # Scales 0-255 to -1024..1024
 
-        # 3. Get Model Predictions
-        outputs = chest_model(img_tensor_norm)
-        probabilities = torch.sigmoid(outputs).cpu() # Keep as tensor
+        # Add channel dimension if missing: (224, 224) -> (1, 224, 224)
+        if img_norm.ndim == 2:
+            img_norm = img_norm[None, ...]
+
+        # Create Tensor
+        img_tensor = torch.from_numpy(img_norm).float()
+        img_tensor = img_tensor.unsqueeze(0) # Add batch dimension -> (1, 1, 224, 224)
+        img_tensor.requires_grad_(True)
+
+        # 4. Prepare for Visualization (GradCAM overlay)
+        # We need a standard float RGB image [0, 1]
+        vis_rgb = cv2.cvtColor(image_np, cv2.COLOR_GRAY2RGB)
+        vis_rgb = np.float32(vis_rgb) / 255.0
+
+        # 5. Get Model Predictions
+        outputs = chest_model(img_tensor)
+        probabilities = torch.sigmoid(outputs).cpu()
 
         # --- Find the pathology with the highest probability ---
         highest_prob = torch.max(probabilities)
@@ -147,47 +172,46 @@ def analyze_chest_xray(image_bytes: bytes) -> dict:
 
         logger.info(f"CheXNet prediction obtained. Highest prob: {highest_pathology_name} ({highest_prob:.3f})")
 
-        # --- Generate Grad-CAM for the highest probability pathology ---
-        logger.info(f"Generating Grad-CAM for '{highest_pathology_name}'...")
-
+        # --- Generate Grad-CAM ---
         cam = GradCAM(model=chest_model, target_layers=chest_model_target_layer)
-
-        # Target the class (pathology) with the highest score
         targets = [ClassifierOutputTarget(highest_prob_index.item())]
 
-        grayscale_cam = cam(input_tensor=img_tensor_norm, targets=targets)
-        grayscale_cam = grayscale_cam[0, :] # Get the first heatmap
+        grayscale_cam = cam(input_tensor=img_tensor, targets=targets)
+        grayscale_cam = grayscale_cam[0, :]
 
         # --- Create overlay ---
-        # We use the resized 3-channel image (vis_rgb) we prepared earlier
+        # vis_rgb matches geometry perfectly now
         cam_image_overlay = show_cam_on_image(vis_rgb, grayscale_cam, use_rgb=True, image_weight=0.6)
         heatmap_image = Image.fromarray(cam_image_overlay)
         heatmap_base64 = convert_to_base64(heatmap_image)
-        logger.info("CheXNet heatmap successfully generated and encoded.")
+        logger.info("CheXNet heatmap successfully generated.")
 
-        # --- 4. Format results ---
+        # --- 6. Format results ---
         results = {}
-        threshold = 0.1 # Probability threshold
-        probabilities_np = probabilities.detach().numpy()[0] # Convert to numpy for iteration
+        probabilities_np = probabilities.detach().numpy()[0]
+
+        # Only return pathologies with probability > threshold
+        threshold = 0.5
 
         for i, pathology in enumerate(chest_model.pathologies):
             prob = float(probabilities_np[i])
             if prob >= threshold:
                 results[pathology] = round(prob, 3)
 
+        # If nothing is above threshold, return the highest one or a "healthy" message
         if not results:
-             results = {"status": f"No findings with probability >= {threshold}."}
+             results["Top Finding"] = f"{highest_pathology_name} ({round(float(highest_prob), 3)})"
+             if float(highest_prob) < 0.5:
+                 results["Status"] = "No significant pathologies detected"
 
-        # ---  Add the new heatmap fields to the results ---
         results["heatmap_base64"] = heatmap_base64
-        results["heatmap_target"] = highest_pathology_name # So frontend knows what heatmap shows
+        results["heatmap_target"] = highest_pathology_name
 
-        logger.info(f"CheXNet analysis complete. Found {len(results)-2} pathologies.") # -2 for heatmap fields
         return {"analysis_results": results}
 
     except Exception as e:
-        logger.exception(f"Error during CheXNet image analysis or CAM generation: {e}")
-        raise HTTPException(status_code=500, detail=f"AI model processing error (CheXNet): {e}")
+        logger.exception(f"Error during CheXNet image analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"AI model error: {e}")
 
 
 # ---

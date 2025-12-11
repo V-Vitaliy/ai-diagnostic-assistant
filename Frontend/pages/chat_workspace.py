@@ -4,6 +4,7 @@ import re
 import sys
 from requests.exceptions import HTTPError, ConnectionError
 
+# Убедись, что api.py обновлен! Он должен принимать session_id
 from app.api import send_chat_message, analyze_file, get_heatmap_url, BASE_API_URL
 
 ANALYSIS_TYPE_MAP = {
@@ -21,7 +22,7 @@ def inject_custom_css():
         /* Global styling */
         .main { background-color: #0E1117; }
 
-        /* Patient header - matching dashboard cards */
+        /* Patient header */
         .patient-header {
             background: linear-gradient(145deg, #1a1d29 0%, #151820 100%);
             border: 1px solid #2d3139;
@@ -95,7 +96,7 @@ def inject_custom_css():
         }
 
         .message-bubble { 
-            max-width: 75%; 
+            max-width: 100%; 
             padding: 14px 20px; 
             border-radius: 18px; 
             font-family: 'Segoe UI', sans-serif; 
@@ -111,10 +112,27 @@ def inject_custom_css():
             margin-bottom: 16px; 
         }
 
+        .user-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            max-width: 75%;
+        }
+
         .user-message { 
             background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%); 
             color: white; 
             border-bottom-right-radius: 4px;
+            text-align: left;
+        }
+        
+        /* New style for the gray file label */
+        .user-meta-label {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 6px;
+            margin-right: 4px;
+            font-style: italic;
         }
 
         .ai-message-container { 
@@ -193,22 +211,24 @@ def format_markdown(text):
     return text
 
 
-def display_message_html(role, content, heatmap_url=None):
+def display_message_html(role, content, heatmap_url=None, file_label=None):
     formatted_content = format_markdown(content)
+
+    # HTML генерируется одной строкой без отступов, чтобы избежать проблем с st.markdown
     if role == "user":
-        st.markdown(
-            f'<div class="user-message-container"><div class="message-bubble user-message">{formatted_content}</div></div>',
-            unsafe_allow_html=True)
+        meta_html = f'<div class="user-meta-label">{file_label}</div>' if file_label else ''
+        html = f"""<div class="user-message-container"><div class="user-wrapper"><div class="message-bubble user-message">{formatted_content}</div>{meta_html}</div></div>"""
+        st.markdown(html, unsafe_allow_html=True)
+
     elif role == "model" or role == "assistant":
-        st.markdown(
-            f'<div class="ai-message-container"><div class="message-bubble ai-message">{formatted_content}</div></div>',
-            unsafe_allow_html=True)
+        html = f"""<div class="ai-message-container"><div class="message-bubble ai-message">{formatted_content}</div></div>"""
+        st.markdown(html, unsafe_allow_html=True)
+
     elif role == "system_visualization":
         if heatmap_url:
             img_html = f'<div class="heatmap-container"><img src="{heatmap_url}" class="heatmap-img"><br><small style="color: #7c8db5;">ℹ️ Wizualizacja z analizy</small></div>'
-            st.markdown(
-                f'<div class="ai-message-container"><div class="message-bubble ai-message">{img_html}</div></div>',
-                unsafe_allow_html=True)
+            html = f"""<div class="ai-message-container"><div class="message-bubble ai-message">{img_html}</div></div>"""
+            st.markdown(html, unsafe_allow_html=True)
 
 
 def display_chat_history():
@@ -224,18 +244,24 @@ def display_chat_history():
     for message in st.session_state.chat_history:
         role = message.get("role", "model")
         content = message.get("parts", [{}])[0].get("text", "")
+        file_label = message.get("file_label", None)
+
         if role == "user":
-            display_message_html("user", content)
+            display_message_html("user", content, file_label=file_label)
         elif role == "system_visualization":
             heatmap_path = message.get('heatmap_storage_path')
             full_url = get_heatmap_url(heatmap_path) if heatmap_path else None
-            display_message_html("system_visualization", "", full_url)
+            display_message_html("system_visualization", "", heatmap_url=full_url)
         else:
             display_message_html("model", content)
 
 
-def add_message_to_history(role, text, is_file_analysis=False, **kwargs):
+def add_message_to_history(role, text, is_file_analysis=False, file_label=None, **kwargs):
     new_message = {"role": role, "parts": [{"text": text}]}
+
+    if file_label:
+        new_message["file_label"] = file_label
+
     if is_file_analysis:
         new_message['role'] = 'system_visualization'
         new_message.update(kwargs)
@@ -243,17 +269,10 @@ def add_message_to_history(role, text, is_file_analysis=False, **kwargs):
 
 
 def extract_ai_response_text(ai_response):
-
-    if not ai_response:
-        return "⚠️ Pusta odpowiedź."
-
-    if "response" in ai_response:
-        return ai_response["response"]
-    if "parts" in ai_response and ai_response["parts"]:
-        return ai_response["parts"][0].get("text", "")
-    if "text" in ai_response:
-        return ai_response["text"]
-
+    if not ai_response: return "⚠️ Pusta odpowiedź."
+    if "response" in ai_response: return ai_response["response"]
+    if "parts" in ai_response and ai_response["parts"]: return ai_response["parts"][0].get("text", "")
+    if "text" in ai_response: return ai_response["text"]
     return str(ai_response)
 
 
@@ -272,12 +291,24 @@ def handle_text_message(user_message, session_id):
 
 def handle_file_upload(session_id, patient_id, uploaded_file, file_type, user_symptoms):
     backend_type = ANALYSIS_TYPE_MAP.get(file_type)
-    add_message_to_history("user", user_symptoms if user_symptoms else f"📎 Plik: {uploaded_file.name}")
+    label_text = f"Załączono: {file_type}"
+
+    # Сразу показываем в истории с лейблом
+    add_message_to_history("user", user_symptoms if user_symptoms else f"📎 Plik: {uploaded_file.name}", file_label=label_text)
+
     try:
         if analyze_file:
             with st.spinner("Analizuję..."):
-                result = analyze_file(patient_id, backend_type, uploaded_file.name, uploaded_file.getvalue(),
-                                      user_symptoms or "Przeanalizuj to.")
+                # ВАЖНО: Передаем session_id, чтобы история сохранилась в БД
+                result = analyze_file(
+                    patient_id=patient_id,
+                    session_id=session_id,
+                    analysis_type=backend_type,
+                    file_name=uploaded_file.name,
+                    file_bytes=uploaded_file.getvalue(),
+                    symptoms=user_symptoms or "Przeanalizuj to."
+                )
+
             if result and (backend_type == "ocr" or result.get("heatmap_storage_path")):
                 add_message_to_history("system_visualization", "Wynik analizy", is_file_analysis=True, **result)
                 add_message_to_history("model", '<span class="status-success">✅ Analiza zakończona.</span>')
@@ -310,7 +341,6 @@ def render():
         p_w = patient.get('weight_kg', '-')
         p_h = patient.get('height_cm', '-')
 
-        # Header with patient info
         st.markdown(f"""
         <div class="patient-header">
             <div class="patient-main-info">
@@ -330,19 +360,15 @@ def render():
         </div>
         """, unsafe_allow_html=True)
 
-        # Back button
         if st.button("⬅️ Powrót do listy", type="secondary"):
             st.session_state.page = 'dashboard'
             st.rerun()
 
-        # Chat history
         display_chat_history()
 
         st.markdown("---")
 
-        # Input area
-        user_text = st.text_area("", placeholder="Wpisz wiadomość...", label_visibility="collapsed", height=85,
-                                 key="chat_in")
+        user_text = st.text_area("", placeholder="Wpisz wiadomość...", label_visibility="collapsed", height=85, key="chat_in")
         c1, c2, c3 = st.columns([1.5, 3.5, 1.5])
 
         uploaded_file = None
@@ -351,8 +377,7 @@ def render():
         with c1:
             with st.popover("📎 Dołącz plik"):
                 ftype = st.selectbox("Typ analizy", list(ANALYSIS_TYPE_MAP.keys()), index=1)
-                uploaded_file = st.file_uploader("Wybierz plik", type=["png", "jpg", "pdf", "nii", "gz"],
-                                                 key=f"upl_{st.session_state.file_uploader_key}")
+                uploaded_file = st.file_uploader("Wybierz plik", type=["png", "jpg", "pdf", "nii", "gz"], key=f"upl_{st.session_state.file_uploader_key}")
 
         with c3:
             if st.button("Wyślij ➡️", type="primary", use_container_width=True):

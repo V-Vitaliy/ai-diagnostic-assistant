@@ -237,7 +237,7 @@ def open_create_modal():
                     "allergies": parse_list(allergies),
                     "medications": parse_list(medications),
                     "height_cm": int(height),
-                    "weight_kg": float(weight)
+                    "weight_kg": int(weight)
                 }
 
                 if create_patient(new_patient_data):
