@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import date, datetime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Date, Integer, func, DateTime
+from sqlalchemy import String, Date, Integer, func, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.db.base import Base
@@ -10,7 +10,12 @@ class Patient(Base):
     __tablename__ = "patients"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    owner: Mapped["User"] = relationship("User", back_populates="patients")
+
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    gender:  Mapped[str] = mapped_column(String(1), nullable=False)
     birth_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     chronic_diseases: Mapped[List[str]] = mapped_column(JSONB, default=list)

@@ -11,7 +11,7 @@ def inject_dashboard_css():
         /* Global styling */
         .main { background-color: #0E1117; }
 
-        /* Patient cards - compact unified design */
+        /* Patient cards */
         .patient-card {
             background: linear-gradient(145deg, #1a1d29 0%, #151820 100%);
             border: 1px solid #2d3139;
@@ -29,7 +29,7 @@ def inject_dashboard_css():
             transform: translateY(-2px);
         }
 
-        /* Patient header with avatar */
+        /* Patient header */
         .patient-header-row {
             display: flex;
             align-items: center;
@@ -61,20 +61,21 @@ def inject_dashboard_css():
             font-size: 1.1rem;
             font-weight: 700;
             color: #ffffff;
-            letter-spacing: 0.3px;
             margin: 0;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
 
-        .patient-age {
+        .patient-sub {
             color: #7c8db5;
             font-size: 0.85rem;
             margin-top: 2px;
+            display: flex;
+            gap: 10px;
         }
 
-        /* Medical info grid */
+        /* Medical info */
         .medical-info-grid {
             display: grid;
             gap: 8px;
@@ -94,25 +95,14 @@ def inject_dashboard_css():
             font-size: 0.75rem;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 3px;
         }
 
         .medical-value {
             color: #c5c9d4;
             font-size: 0.85rem;
-            line-height: 1.3;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-        }
-
-        .no-data-text {
-            color: #6b7280;
-            font-size: 0.85rem;
-            font-style: italic;
-            text-align: center;
-            padding: 20px 0;
         }
 
         /* New patient card */
@@ -133,34 +123,14 @@ def inject_dashboard_css():
             border-color: #5a6073;
             background: linear-gradient(145deg, #232838 0%, #1d2028 100%);
         }
-
-        .new-patient-icon {
-            font-size: 2.2rem;
-            margin-bottom: 8px;
-            opacity: 0.7;
-        }
-
-        .new-patient-text {
-            color: #9ba3b8;
-            font-size: 1rem;
-            font-weight: 600;
-            letter-spacing: 0.3px;
-        }
-
-        /* Modal styling */
-        .modal-header {
-            color: #7c8db5;
-            font-size: 0.9rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 20px;
-        }
+        .new-patient-icon { font-size: 2.2rem; margin-bottom: 8px; opacity: 0.7; }
+        .new-patient-text { color: #9ba3b8; font-size: 1rem; font-weight: 600; }
+        .modal-header { color: #7c8db5; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
 
 def calculate_age(birth_date_str):
-    """Calculates age based on date of birth"""
     if not birth_date_str: return "N/A"
     try:
         birth = datetime.strptime(birth_date_str, "%Y-%m-%d")
@@ -171,39 +141,34 @@ def calculate_age(birth_date_str):
 
 
 def get_initials(name):
-    """Get initials from name for avatar"""
-    if not name:
-        return "?"
+    if not name: return "?"
     parts = name.strip().split()
-    if len(parts) >= 2:
-        return f"{parts[0][0]}{parts[1][0]}".upper()
+    if len(parts) >= 2: return f"{parts[0][0]}{parts[1][0]}".upper()
     return parts[0][0].upper() if parts else "?"
 
 
 def handle_click(patient):
-    """Handler for patient selection: starts session and redirects to chat"""
     with st.spinner(f"Ładowanie karty pacjenta {patient['name']}..."):
         session_data = init_chat_session(patient['id'])
-
         if session_data and 'session_id' in session_data:
             st.session_state['session_id'] = session_data['session_id']
-            history = session_data.get('history_json', [])
-            st.session_state['chat_history'] = history
-            st.session_state['current_patient'] = patient
+            st.session_state['chat_history'] = session_data.get('history_json', [])
             st.session_state['patient_data'] = patient
             st.session_state['page'] = 'chat'
             st.rerun()
         else:
-            st.error("Błąd serwera: nie udało się utworzyć sesji lub pobrać historii.")
+            st.error("Błąd serwera: nie udało się utworzyć sesji.")
 
 
 @st.dialog("Nowy pacjent")
 def open_create_modal():
-    st.markdown('<div class="modal-header">Wypełnij dane, aby utworzyć nową kartę pacjenta</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="modal-header">Dane Pacjenta</div>', unsafe_allow_html=True)
 
     with st.form("create_patient_form"):
         name = st.text_input("Imię i Nazwisko", placeholder="Jan Kowalski")
+        gender_options = {"Mężczyzna": "M", "Kobieta": "F"}
+        gender_label = st.selectbox("Płeć", list(gender_options.keys()))
+
         birth_date = st.date_input("Data urodzenia", min_value=datetime(1900, 1, 1), value=datetime(1990, 1, 1))
 
         col_hw1, col_hw2 = st.columns(2)
@@ -212,13 +177,14 @@ def open_create_modal():
         with col_hw2:
             weight = st.number_input("Waga (kg)", min_value=20.0, max_value=300.0, value=70.0, step=0.5, format="%.1f")
 
+        st.markdown("---")
         col1, col2 = st.columns(2)
         with col1:
-            chronic = st.text_area("Choroby przewlekłe", placeholder="Cukrzyca, Astma (oddzielone przecinkami)")
+            chronic = st.text_area("Choroby przewlekłe", placeholder="Astma, Cukrzyca")
         with col2:
-            allergies = st.text_area("Alergie", placeholder="Pyłki, Orzechy (oddzielone przecinkami)")
+            allergies = st.text_area("Alergie", placeholder="Pyłki, Penicylina")
 
-        medications = st.text_input("Przyjmowane leki", placeholder="Aspiryna, Insulina (oddzielone przecinkami)")
+        medications = st.text_input("Przyjmowane leki", placeholder="Metformina, Ventolin")
 
         submitted = st.form_submit_button("Zapisz profil", type="primary", use_container_width=True)
 
@@ -232,6 +198,7 @@ def open_create_modal():
 
                 new_patient_data = {
                     "name": name,
+                    "gender": gender_options[gender_label],
                     "birth_date": str(birth_date),
                     "chronic_diseases": parse_list(chronic),
                     "allergies": parse_list(allergies),
@@ -241,74 +208,60 @@ def open_create_modal():
                 }
 
                 if create_patient(new_patient_data):
-                    st.success("Pacjent został pomyślnie utworzony!")
+                    st.success("Pacjent utworzony!")
                     st.rerun()
                 else:
-                    st.error("Nie udało się zapisać pacjenta. Sprawdź logi.")
+                    st.error("Błąd zapisu (API Error).")
 
 
 def render():
     inject_dashboard_css()
-
     st.title("🏥 Panel Pacjentów")
     st.markdown("---")
 
     patients = fetch_patients()
     cols = st.columns(3)
 
-    # Loop through existing patients
     for idx, patient in enumerate(patients):
         with cols[idx % 3]:
             patient_name = patient.get('name', 'Bez nazwy')
+
+            gender_code = patient.get('gender', 'M')
+            gender_icon = "♂️" if gender_code == 'M' else "♀️"
+
             age = calculate_age(patient.get('birth_date'))
             initials = get_initials(patient_name)
 
-            # Build medical info
             chronic = patient.get('chronic_diseases', [])
-            allergies = patient.get('allergies', [])
-            medications = patient.get('medications', [])
+            meds = patient.get('medications', [])
 
-            medical_items = []
-            if chronic and len(chronic) > 0:
-                chronic_text = ", ".join(chronic)
-                medical_items.append(
-                    f'<div class="medical-item"><div class="medical-label">Choroby</div><div class="medical-value">{chronic_text}</div></div>')
+            info_html = ""
+            if chronic: info_html += f'<div class="medical-item"><div class="medical-label">Choroby</div><div class="medical-value">{", ".join(chronic)}</div></div>'
+            if meds: info_html += f'<div class="medical-item"><div class="medical-label">Leki</div><div class="medical-value">{", ".join(meds)}</div></div>'
+            if not info_html: info_html = '<div class="no-data-text">Brak danych</div>'
 
-            if allergies and len(allergies) > 0:
-                allergies_text = ", ".join(allergies)
-                medical_items.append(
-                    f'<div class="medical-item"><div class="medical-label">Alergie</div><div class="medical-value">{allergies_text}</div></div>')
-
-            if medications and len(medications) > 0:
-                meds_text = ", ".join(medications)
-                medical_items.append(
-                    f'<div class="medical-item"><div class="medical-label">Leki</div><div class="medical-value">{meds_text}</div></div>')
-
-            medical_html = "".join(
-                medical_items) if medical_items else '<div class="no-data-text">Brak danych medycznych</div>'
-
-            # Render card
             st.markdown(f'''
                 <div class="patient-card">
                     <div class="patient-header-row">
                         <div class="patient-avatar">{initials}</div>
                         <div class="patient-name-block">
                             <div class="patient-name">{patient_name}</div>
-                            <div class="patient-age">{age} lat</div>
+                            <div class="patient-sub">
+                                <span>{gender_icon} {age} lat</span>
+                            </div>
                         </div>
                     </div>
                     <div class="medical-info-grid">
-                        {medical_html}
+                        {info_html}
                     </div>
                 </div>
             ''', unsafe_allow_html=True)
 
-            # Button
             st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-            if st.button("💬 Przejdź do czatu", key=f"btn_{patient['id']}", use_container_width=True, type="primary"):
+            if st.button("💬 Czat", key=f"btn_{patient['id']}", use_container_width=True, type="primary"):
                 handle_click(patient)
 
-    # "Create New" Card
+    # Карточка создания
     next_idx = len(patients)
     with cols[next_idx % 3]:
         st.markdown('''
@@ -317,7 +270,6 @@ def render():
                 <div class="new-patient-text">Nowy Pacjent</div>
             </div>
         ''', unsafe_allow_html=True)
-
         st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
         if st.button("Utwórz profil", key="btn_create_new", use_container_width=True, type="secondary"):
             open_create_modal()

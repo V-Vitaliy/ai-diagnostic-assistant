@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional,Literal
 from datetime import date, datetime
 
 class PatientBase(BaseModel):
@@ -8,6 +8,7 @@ class PatientBase(BaseModel):
     Used for creating and updating patient profiles.
     """
     name: str
+    gender: Literal["M","F"]
     birth_date: date
     chronic_diseases: List[str] = []
     allergies: List[str] = []
