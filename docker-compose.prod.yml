@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./Backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_static_data:/app/app/static
+      - ./Backend/app/services/models/model.pt:/app/app/services/models/model.pt
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      BACKEND_CORS_ORIGINS: "http://localhost:8501,http://${PUBLIC_IP}:8501"
+      SECRET_KEY: ${SECRET_KEY}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: always
+
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    ports:
+      - "5432:5432"
+
+  frontend:
+    build:
+      context: ./Frontend
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    environment:
+      BACKEND_URL: "http://backend:8000"
+      EXTERNAL_BACKEND_URL: "http://${PUBLIC_IP}:8000"
+    restart: always
+
+volumes:
+  postgres_data:
+  backend_static_data:

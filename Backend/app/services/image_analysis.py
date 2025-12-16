@@ -89,7 +89,6 @@ fracture_model_target_layer = None
 
 def load_fracture_model():
     """Loads the custom Fracture Detection model."""
-    # (This function is unchanged)
     global fracture_model, fracture_model_target_layer
     if fracture_model is None:
         try:
