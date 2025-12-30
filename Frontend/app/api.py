@@ -3,7 +3,7 @@ import os
 import streamlit as st
 
 BASE_API_URL = os.environ.get("BACKEND_URL", "http://backend:8000")
-BASE_EXTERNAL_URL = os.environ.get("EXTERNAL_BACKEND_URL", "http://localhost:8080")
+BASE_EXTERNAL_URL = os.environ.get("EXTERNAL_BACKEND_URL", "http://localhost:8000")
 
 def get_full_api_url(path: str) -> str:
     base = BASE_API_URL.rstrip('/')
@@ -11,12 +11,33 @@ def get_full_api_url(path: str) -> str:
     return f"{base}/{path}"
 
 def get_heatmap_url(storage_path: str) -> str:
-    if not storage_path: return None
-    relative_path = storage_path.replace("app/", "")
-    return f"{BASE_EXTERNAL_URL}/{relative_path.lstrip('/')}"
+    """
+    Converts a backend storage path to a browser-accessible URL.
+    Backend stores: /app/app/static/heatmaps/xyz.png
+    Browser needs: http://localhost:8000/static/heatmaps/xyz.png
+    """
+    if not storage_path:
+        return None
+
+    # Normalize path separators
+    storage_path = storage_path.replace("\\", "/")
+
+    # We need to find the part of the path starting from 'static/'
+    # Because FastAPI usually mounts the static folder to '/static' path.
+    if "/static/" in storage_path:
+        # Split by the first occurrence of /static/
+        # e.g., /app/app/static/heatmaps/img.png -> heatmaps/img.png
+        _, relative_path = storage_path.split("/static/", 1)
+
+        # Construct full URL
+        # Ensure BASE_EXTERNAL_URL doesn't end with slash
+        base = BASE_EXTERNAL_URL.rstrip('/')
+        return f"{base}/static/{relative_path}"
+
+    return None
 
 def get_auth_headers():
-    """Достает токен из сессии Streamlit и формирует заголовок"""
+    """Gets Token from the Streamlit session state and returns Authorization header with Bearer token."""
     token = st.session_state.get("token")
     if token:
         return {"Authorization": f"Bearer {token}"}
