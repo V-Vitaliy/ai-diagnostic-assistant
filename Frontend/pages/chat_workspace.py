@@ -4,7 +4,6 @@ import re
 import sys
 from requests.exceptions import HTTPError, ConnectionError
 
-# Убедись, что api.py обновлен! Он должен принимать session_id
 from app.api import send_chat_message, analyze_file, get_heatmap_url, BASE_API_URL
 
 ANALYSIS_TYPE_MAP = {
@@ -126,7 +125,6 @@ def inject_custom_css():
             text-align: left;
         }
         
-        /* New style for the gray file label */
         .user-meta-label {
             font-size: 0.75rem;
             color: #6b7280;
@@ -200,6 +198,18 @@ def inject_custom_css():
             border-color: #2d3139;
             margin: 24px 0;
         }
+        
+        /* Debug info */
+        .debug-info {
+            background-color: #1a1d29;
+            border: 1px solid #2d3139;
+            padding: 10px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: #7c8db5;
+            margin-top: 8px;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -211,10 +221,9 @@ def format_markdown(text):
     return text
 
 
-def display_message_html(role, content, heatmap_url=None, file_label=None):
+def display_message_html(role, content, heatmap_url=None, file_label=None, debug_info=None):
     formatted_content = format_markdown(content)
 
-    # HTML генерируется одной строкой без отступов, чтобы избежать проблем с st.markdown
     if role == "user":
         meta_html = f'<div class="user-meta-label">{file_label}</div>' if file_label else ''
         html = f"""<div class="user-message-container"><div class="user-wrapper"><div class="message-bubble user-message">{formatted_content}</div>{meta_html}</div></div>"""
@@ -226,8 +235,16 @@ def display_message_html(role, content, heatmap_url=None, file_label=None):
 
     elif role == "system_visualization":
         if heatmap_url:
-            img_html = f'<div class="heatmap-container"><img src="{heatmap_url}" class="heatmap-img"><br><small style="color: #7c8db5;">ℹ️ Wizualizacja z analizy</small></div>'
+            # Add debug info
+            debug_html = ""
+            if debug_info:
+                debug_html = f'<div class="debug-info">Debug: {debug_info}</div>'
+
+            img_html = f'<div class="heatmap-container"><img src="{heatmap_url}" class="heatmap-img" onerror="this.onerror=null; this.parentElement.innerHTML=\'⚠️ Nie udało się załadować obrazu<br><small>{heatmap_url}</small>\';"><br><small style="color: #7c8db5;">ℹ️ Wizualizacja z analizy</small>{debug_html}</div>'
             html = f"""<div class="ai-message-container"><div class="message-bubble ai-message">{img_html}</div></div>"""
+            st.markdown(html, unsafe_allow_html=True)
+        else:
+            html = f"""<div class="ai-message-container"><div class="message-bubble ai-message">⚠️ Brak URL wizualizacji{f'<div class="debug-info">{debug_info}</div>' if debug_info else ''}</div></div>"""
             st.markdown(html, unsafe_allow_html=True)
 
 
@@ -251,7 +268,12 @@ def display_chat_history():
         elif role == "system_visualization":
             heatmap_path = message.get('heatmap_storage_path')
             full_url = get_heatmap_url(heatmap_path) if heatmap_path else None
-            display_message_html("system_visualization", "", heatmap_url=full_url)
+
+            # Debug info
+            debug_info = f"Ścieżka: {heatmap_path} | URL: {full_url}"
+            print(f"[DISPLAY DEBUG] {debug_info}")
+
+            display_message_html("system_visualization", "", heatmap_url=full_url, debug_info=debug_info)
         else:
             display_message_html("model", content)
 
@@ -265,6 +287,9 @@ def add_message_to_history(role, text, is_file_analysis=False, file_label=None, 
     if is_file_analysis:
         new_message['role'] = 'system_visualization'
         new_message.update(kwargs)
+        # Debug logging
+        print(f"[ADD MESSAGE] Adding visualization message with kwargs: {kwargs}")
+
     st.session_state.chat_history.append(new_message)
 
 
@@ -293,13 +318,13 @@ def handle_file_upload(session_id, patient_id, uploaded_file, file_type, user_sy
     backend_type = ANALYSIS_TYPE_MAP.get(file_type)
     label_text = f"Załączono: {file_type}"
 
-    # Сразу показываем в истории с лейблом
-    add_message_to_history("user", user_symptoms if user_symptoms else f"📎 Plik: {uploaded_file.name}", file_label=label_text)
+    # Show message in history immediately with label
+    add_message_to_history("user", user_symptoms if user_symptoms else f"🔎 Plik: {uploaded_file.name}", file_label=label_text)
 
     try:
         if analyze_file:
             with st.spinner("Analizuję..."):
-                # ВАЖНО: Передаем session_id, чтобы история сохранилась в БД
+                # IMPORTANT: Pass session_id to preserve history in DB
                 result = analyze_file(
                     patient_id=patient_id,
                     session_id=session_id,
@@ -309,15 +334,19 @@ def handle_file_upload(session_id, patient_id, uploaded_file, file_type, user_sy
                     symptoms=user_symptoms or "Przeanalizuj to."
                 )
 
+            print(f"[FILE UPLOAD] Backend result: {result}")
+
             if result and (backend_type == "ocr" or result.get("heatmap_storage_path")):
                 add_message_to_history("system_visualization", "Wynik analizy", is_file_analysis=True, **result)
                 add_message_to_history("model", '<span class="status-success">✅ Analiza zakończona.</span>')
             else:
-                add_message_to_history("model", '<span class="status-error">⚠️ Analiza niekompletna.</span>')
+                add_message_to_history("model", f'<span class="status-error">⚠️ Analiza niekompletna. Wynik: {result}</span>')
         else:
             add_message_to_history("model", "⚠️ API niedostępne.")
     except Exception as e:
         add_message_to_history("model", f"⚠️ Błąd: {e}")
+        import traceback
+        print(f"[ERROR] Full traceback: {traceback.format_exc()}")
 
 
 # MAIN RENDER FUNCTION
@@ -375,7 +404,7 @@ def render():
         ftype = None
 
         with c1:
-            with st.popover("📎 Dołącz plik"):
+            with st.popover("🔎 Dołącz plik"):
                 ftype = st.selectbox("Typ analizy", list(ANALYSIS_TYPE_MAP.keys()), index=1)
                 uploaded_file = st.file_uploader("Wybierz plik", type=["png", "jpg", "pdf", "nii", "gz"], key=f"upl_{st.session_state.file_uploader_key}")
 
@@ -390,3 +419,5 @@ def render():
 
     except Exception as e:
         st.error(f"Błąd krytyczny renderowania: {e}")
+        import traceback
+        st.code(traceback.format_exc())
