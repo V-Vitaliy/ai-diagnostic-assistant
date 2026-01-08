@@ -1,6 +1,7 @@
 import streamlit as st
 import re
-from app.api import send_chat_message, analyze_file, get_heatmap_url, BASE_API_URL
+import time
+from app.api import send_chat_message, analyze_file, get_analysis_status, get_heatmap_url, BASE_API_URL
 
 ANALYSIS_TYPE_MAP = {
     "Foto analizy krwi/moczu": "ocr",
@@ -49,6 +50,7 @@ def inject_custom_css():
 
         .status-success { color: #4CAF50; font-weight: bold; }
         .status-error { color: #F44336; font-weight: bold; }
+        .status-pending { color: #FFC107; font-weight: bold; }
 
         .stTextArea textarea { background-color: #1a1d29 !important; border: 1px solid #2d3139 !important; border-radius: 12px !important; color: #E0E0E0 !important; }
         .stTextArea textarea:focus { border-color: #4e4376 !important; box-shadow: 0 0 0 1px #4e4376 !important; }
@@ -126,30 +128,81 @@ def handle_text_message(user_message, session_id):
     except Exception as e:
         add_message_to_history("model", f"⚠️ Błąd: {e}")
 
-def handle_file_upload(session_id, patient_id, uploaded_file, file_type, user_symptoms):
+def handle_file_upload_with_polling(session_id, patient_id, uploaded_file, file_type, user_symptoms):
     backend_type = ANALYSIS_TYPE_MAP.get(file_type)
     label_text = f"Załączono: {file_type}"
+
+    # 1. Add user message immediately
     add_message_to_history("user", user_symptoms if user_symptoms else f"🔎 Plik: {uploaded_file.name}", file_label=label_text)
+
+    status_placeholder = st.empty()
+    progress_bar = st.progress(0, text="Przesyłanie pliku...")
+
     try:
+        # 2. Start Analysis (Get ID)
         if analyze_file:
-            with st.spinner("Analizuję..."):
-                result = analyze_file(
-                    patient_id=patient_id,
-                    session_id=session_id,
-                    analysis_type=backend_type,
-                    file_name=uploaded_file.name,
-                    file_bytes=uploaded_file.getvalue(),
-                    symptoms=user_symptoms or "Przeanalizuj to."
-                )
-            if result and (backend_type == "ocr" or result.get("heatmap_storage_path")):
-                add_message_to_history("system_visualization", "Wynik analizy", is_file_analysis=True, **result)
-                add_message_to_history("model", '<span class="status-success">✅ Analiza zakończona.</span>')
-            else:
-                add_message_to_history("model", '<span class="status-error">⚠️ Analiza niekompletna.</span>')
+            init_resp = analyze_file(
+                patient_id=patient_id,
+                session_id=session_id,
+                analysis_type=backend_type,
+                file_name=uploaded_file.name,
+                file_bytes=uploaded_file.getvalue(),
+                symptoms=user_symptoms or "Przeanalizuj to."
+            )
+
+            analysis_id = init_resp.get("id")
+            if not analysis_id:
+                status_placeholder.error("Błąd: Nie otrzymano ID analizy.")
+                return
+
+            # 3. Polling Loop
+            progress_val = 10
+            progress_bar.progress(progress_val, text="Rozpoczynanie analizy AI...")
+
+            # Polling parameters
+            max_retries = 120 # 2 minutes max (assuming 1s sleep)
+
+            for i in range(max_retries):
+                # Check status
+                status_data = get_analysis_status(analysis_id)
+                status = status_data.get("status", "UNKNOWN")
+
+                if status == "COMPLETED":
+                    progress_bar.progress(100, text="Analiza zakończona!")
+                    time.sleep(0.5)
+                    progress_bar.empty()
+
+                    result = status_data
+                    # Add result to chat history
+                    if result and (backend_type == "ocr" or result.get("heatmap_storage_path")):
+                        add_message_to_history("system_visualization", "Wynik analizy", is_file_analysis=True, **result)
+                        add_message_to_history("model", '<span class="status-success">✅ Analiza zakończona pomyślnie.</span>')
+                    else:
+                        add_message_to_history("model", '<span class="status-error">⚠️ Analiza zakończona, ale wyniki niekompletne.</span>')
+                    return # Done
+
+                elif status == "FAILED":
+                    progress_bar.empty()
+                    error_msg = status_data.get("error", "Nieznany błąd")
+                    add_message_to_history("model", f'<span class="status-error">⚠️ Błąd analizy: {error_msg}</span>')
+                    return
+
+                else: # PENDING
+                    # Fake progress increment up to 90%
+                    if progress_val < 90:
+                        progress_val += 2
+                    progress_bar.progress(progress_val, text=f"AI przetwarza obraz... ({status})")
+                    time.sleep(1.5) # Wait before next poll
+
+            # Timeout
+            progress_bar.empty()
+            add_message_to_history("model", '<span class="status-error">⚠️ Przekroczono czas oczekiwania на analizę.</span>')
+
         else:
             add_message_to_history("model", "⚠️ API niedostępne.")
     except Exception as e:
-        add_message_to_history("model", f"⚠️ Błąd: {e}")
+        status_placeholder.empty()
+        add_message_to_history("model", f"⚠️ Błąd krytyczny: {e}")
 
 def render():
     inject_custom_css()
@@ -208,7 +261,8 @@ def render():
     with c3:
         if st.button("Wyślij ➡️", type="primary", use_container_width=True):
             if uploaded_file:
-                handle_file_upload(st.session_state.session_id, p_id, uploaded_file, ftype, user_text)
+                # Use the new polling handler
+                handle_file_upload_with_polling(st.session_state.session_id, p_id, uploaded_file, ftype, user_text)
                 st.session_state.file_uploader_key += 1
             elif user_text:
                 handle_text_message(user_text, st.session_state.session_id)
