@@ -9,7 +9,7 @@ services:
     volumes:
       - backend_static_data:/app/app/static
       - ./Backend/app/services/models/model.pt:/app/app/services/models/model.pt
-      - ./Backend/bundles:/app/bundles
+      - ./bundles:/app/bundles
     depends_on:
       - db
     environment:
