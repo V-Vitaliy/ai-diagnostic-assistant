@@ -51,8 +51,7 @@
             "load_path": "$@ckpt_dir + '/model.pt'",
             "load_dict": {
                 "model": "@network"
-            },
-          "weights_only": false
+            }
         },
         {
             "_target_": "StatsHandler",
