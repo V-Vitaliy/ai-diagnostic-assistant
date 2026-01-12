@@ -160,7 +160,8 @@
         "load_dict": {
             "model": "@network"
         },
-      "map_location": "@device"
+      "map_location": "@device",
+      "weights_only": false
     },
     "initialize": [
         "$setattr(torch.backends.cudnn, 'benchmark', True)",
