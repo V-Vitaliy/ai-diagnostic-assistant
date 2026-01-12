@@ -2,8 +2,6 @@ fastapi
 uvicorn
 pydantic
 python-multipart
-torch
-torchvision
 scikit-learn
 pandas
 huggingface_hub
