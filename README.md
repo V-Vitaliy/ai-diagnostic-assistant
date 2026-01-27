@@ -2,63 +2,57 @@
 
 ## 1. Opis Projektu
 
-**AI Diagnostic Assistant** to inteligentny system wsparcia diagnostycznego opracowany w ramach kursu *Projekt interdyscyplinarny*.  
-Aplikacja wykorzystuje architekturę mikrousług (Docker) oraz modele sztucznej inteligencji do analizy obrazów medycznych i wspierania lekarzy w procesie decyzyjnym.
+**AI Diagnostic Assistant** to zaawansowany system wspomagania decyzji klinicznych (CDSS), który łączy najnowocześniejsze osiągnięcia analizy obrazowej (Computer Vision) z przetwarzaniem języka naturalnego (LLM). System dostarcza lekarzom tzw. "drugą opinię", analizując zdjęcia RTG/TK pod kątem patologii i generując wyjaśnialne mapy aktywacji (XAI).
 
-Główne funkcje systemu:
+**Główne Funkcjonalności**:
 
-- Analiza obrazów medycznych (RTG, TK, itp.)  
-- Wykrywanie potencjalnych patologii (np. zapalenie płuc, złamania)  
-- Generowanie map ciepła (Grad-CAM), wskazujących obszary kluczowe dla modelu  
-- **W przyszłości:** integracja danych pacjenta oraz generowanie raportów tekstowych przy użyciu LLM  
+- **Bezpieczna Autoryzacja**: System zarządzania dostępem oparty na protokole JWT (python-jose, passlib). Zapewnia pełną izolację danych pacjentów i bezpieczne logowanie.  
+- **Analysis Workspace**: Moduł analizy obrazów medycznych (np. RTG klatki piersiowej) wykrywający patologie takie jak zapalenie płuc czy złamania.
+- **Wyjaśnialna Sztuczna Inteligencja (XAI)**: Generowanie map ciepła przy użyciu algorytmu Grad-CAM, co pozwala lekarzowi zrozumieć, na których fragmentach obrazu model oparł swoją diagnozę.
+- **Inteligentny Chatbot**: Interfejs konwersacyjny zintegrowany z Google ADK, umożliwiający zadawanie pytań dotyczących wyników badań oraz historii pacjenta.
+- **Obsługa OCR**: Wykorzystanie EasyOCR do digitalizacji danych z dokumentacji medycznej.
+ 
 
 ## 2. Stos Technologiczny (Tech Stack)
 
-| Komponent | Technologia |
-|----------|-------------|
-| Backend API | Python, FastAPI |
-| Frontend UI | Python, Streamlit |
-| Konteneryzacja | Docker, Docker Compose |
-| Baza danych | PostgreSQL |
-| AI – Obrazowanie | PyTorch, torchxrayvision, pytorch-grad-cam |
-| Modele AI | DenseNet (CheXNet), własny DenseNet (MURA) |
+| Komponent | Technologia | Rola w projekcie |
+|----------|-------------|-------------|
+| Frontend | Streamlit, Requests | Interaktywny interfejs użytkownika (UI/UX) i komunikacja z API. |
+| Backend API | FastAPI, Uvicorn, Pydantic | Asynchroniczna logika biznesowa, routing i walidacja danych. |
+| AI - Computer Vision | PyTorch, torchxrayvision, MONAI | Silniki detekcji, segmentacji i klasyfikacji obrazów medycznych. | 
+| LLM / Chatbot | google-genai | Generowanie raportów medycznych i inteligentna konwersacja. |
+| Baza Danych | PostgreSQL, SQLAlchemy, asyncpg | Relacyjne, asynchroniczne przechowywanie danych i wyników badań. |
+| Migracje DB | Alembic | Wersjonowanie schematu bazy danych. |
+| Konteneryzacja |Docker, Docker Compose | |
+| Przetwarzanie Danych | pandas, scikit-learn, nibabel | Manipulacja danymi tabelarycznymi i obsługa formatów medycznych (NIfTI). |
 
-## 3. Architektura Systemu
 
-System składa się z trzech kontenerów Docker komunikujących się przez sieć wewnętrzną:
+## 3. Architektura i Przepływ Danych (Workflow)
 
-- **Frontend (Streamlit)** – interfejs użytkownika dostępny w przeglądarce; umożliwia przesyłanie obrazów i danych  
-- **Backend (FastAPI)** – główny moduł logiczny; odbiera żądania, integruje modele AI, zarządza przepływem danych  
-- **Database (PostgreSQL)** – przechowuje profile pacjentów oraz wyniki analiz  
+System został zaprojektowany zgodnie z paradygmatem mikrousług, co zapewnia skalowalność i łatwość wdrażania nowych modeli.
 
-## 4. Jak Uruchomić Projekt (Lokalnie)
+**Warstwa Prezentacji** (Streamlit): Lekarz przesyła obraz diagnostyczny lub wprowadza objawy. Frontend komunikuje się z backendem za pomocą biblioteki requests.
 
-Projekt jest w pełni skonteneryzowany — nie wymaga ręcznej instalacji bibliotek.
+**Warstwa Logiki** (FastAPI): Żądanie trafia do endpointu, gdzie następuje autoryzacja tokenem JWT. Dane są wstępnie przetwarzane i kolejkowane do silnika AI.
 
-### Wymagania
+**Warstwa Inferencyjna** (PyTorch/XAI):
 
-- Docker Desktop  
-- Model z wagami do detekcji złamań (model.pt) umieszczony w katalogu:  
-  `backend/app/services/models/`
+- Model klasyfikuje obraz (np. przy użyciu wag z torchxrayvision).
 
-### Uruchomienie
-1. Sklonuj repozytorium:
-  git clone [URL-TWOJEGO-REPOZYTORIUM]
-  cd ai-diagnostic-assistant
-2. Uruchom platformę:
-  docker-compose up --build
-3. Otwórz aplikację:
+- Biblioteka pytorch-gradcam generuje wizualizację istotnych obszarów (Heatmaps).
 
-- Frontend (UI): http://localhost:8501  
-- Backend (API Docs – Swagger): http://localhost:8080/docs  
+- W przypadku dokumentów tekstowych, EasyOCR wyodrębnia kluczowe informacje do bazy wiedzy.
 
-## 5. Zespół (Role)
+**Warstwa Persystencji** (PostgreSQL): Wszystkie wyniki analizy, metadane obrazu oraz historia sesji czatu są zapisywane asynchronicznie w bazie danych.
+ Wykorzystane Modele AI i Standardy
 
-| Rola | Odpowiedzialność |
-|------|-------------------|
-| Product Owner, Team Lead, AI/Backend Lead | Strategia, zarządzanie, architektura, modele AI |
-| Backend Developer | API, baza danych, integracja usług |
-| Frontend Developer (Lead) | Projektowanie i implementacja UI |
-| Frontend Developer | Komponenty interfejsu |
-| QA & Documentation Specialist | Testy, dokumentacja, zgodność z wymaganiami kursu |1. Sklonuj repozytorium:
+## 4. Wykorzystane Modele AI i Standardy
+W systemie zaimplementowano uznane architektury sieci neuronowych:
 
+**DenseNet (CheXNet/MURA)**: Wykorzystywane do precyzyjnej klasyfikacji zdjęć RTG klatki piersiowej oraz badań układu kostno-szkieletowego.
+
+**MONAI/wholeBody_ct_segmentation** (https://zenodo.org/record/6802614#.Y9iTydLMJ6I): Wykorzystanie standardów MONAI (Zenodo) do zaawansowanej segmentacji całego ciała w badaniach TK.
+
+**TorchXrayVision**: Wykorzystanie modeli SOTA (State-of-the-art) wytrenowanych na ogromnych zbiorach danych radiologicznych.
+
+**LightGBM**: Moduł wspierający analizę danych tabelarycznych (np. predykcja ryzyka na podstawie parametrów krwi).
